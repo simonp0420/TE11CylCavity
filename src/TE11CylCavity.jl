@@ -1,0 +1,232 @@
+module TE11CylCavity
+
+using StaticArrays
+using PRIMA: newuoa
+using Dierckx: Dierckx # Spline1D and derivative
+using Roots: Roots  # find_zero
+
+
+
+
+
+"Speed of light [m/s]"
+const c₀mks = 299792458.0
+
+"Speed of light [inch*GHz]"
+const c₀ = c₀mks / 25.4e6 
+
+"Permeability of free space [H/m]"
+const μ₀ = 1.25663706212 * 1e-6
+
+"Permeability of free space [F/m]"
+const ϵ₀ = 1 / (μ₀ * c₀mks^2)
+
+"Intrinsic impedance of free space [F/m]"
+const η₀ = sqrt(μ₀ / ϵ₀)
+
+
+include("read_touchstone.jl")
+
+
+
+"""
+    kcalc(f, ϵᵣ = 1.0, tanδ = 0.0)
+
+Compute the complex intrinsic wavenumber at frequency `f` (in GHz) of a medium with dielectric constant `ϵᵣ`
+and loss tangent `tanδ`.  The returned value will be in units of radians/inch.
+"""
+function kcalc(f, ϵᵣ = 1.0, tanδ = 0.0)
+    λ₀ = c₀ / f
+    k0 = 2π / λ₀
+    k = k0 * sqrt(ϵᵣ * complex(1.0, -tanδ))
+    imag(k) > 0 && (k = -k)
+    return k
+end
+
+
+"""
+    kcocalc(a)
+Compute cutoff radial wavenumber for the TE11 mode in a circular waveguide of radius `a`.
+Units will be inverse length in whatever length units `a` was expressed in.
+"""
+function kcocalc(a)
+    p′₁₁ = 1.84118378134065930264363 # First zero of J1'
+    return p′₁₁ / a
+end
+
+"""
+    βcalc(k, a, Rsnorm)
+Compute the complex propagation constant for the TE11 mode in a circular waveguide of radius `a`.
+## Input Arguments
+- `k`: The medium instrinsic wavenumber (radians/inch). 
+- `a`: The radius of the cylindrical waveguide (inches)
+- `Rsnorm`: The ratio of the Rs to the intrinsic impedance of the medium, where Rs is the surface resistance.
+"""
+function βcalc(k, a, Rsnorm)
+    kco = kcocalc(a)
+    βdiel = sqrt(k^2 - kco^2)
+    imag(βdiel) > 0 && (βdiel = -βdiel)
+    kco = kcocalc(a)
+    p′11 = kcocalc(1.0)
+    kratio = (kco / k)^2 |> real
+    α = Rsnorm / a * inv(sqrt(1 - kratio)) * (kratio + inv(p′11^2 - 1)) # Collin FTOGW Table 5.5
+    β = βdiel + complex(0.0, -α)
+    return β
+end
+
+
+"""
+    cascade(a, b) -> c
+Cascade two-port circuits represented by the 2x2 scattering matrices `a` and `b`, and return result in `c`.
+Assumes that port 2 of `a` is connected to port 1 of `b`. 
+"""
+function cascade(a, b)
+    den = 1 - a[2,2] * b[1,1]  
+    c = @SMatrix [a[1,1]+a[1,2]*a[2,1]*b[1,1]/den   a[1,2]*b[2,1]/den
+                  a[2,1]*b[1,2]/den                 b[2,2]+b[1,2]*b[2,1]*a[2,2]/den]
+    return c
+end
+
+"""
+    sr2chfss
+Return the midband 2x2 S matrix of the lossy transition from rectangular (port 1) to circular 
+(port 2) waveguide obtained from HFSS simulation.
+"""
+sr2chfss() = @SMatrix [0.998358*cis(deg2rad(177.2))   0.015691*cis(deg2rad(87.14))
+                       0.015691*cis(deg2rad(87.14))   0.998563*cis(deg2rad(178.48))]
+
+
+                       
+"""
+    sim_cavity_s21(geom, Rs, ϵᵣ, tanδ, fghz) -> smat
+
+Simulate the value of S₁₂ for a cylindrical cavity with dielectric sample inserted.
+
+## Input Arguments
+- `geom`: A named tuple with the following fields:
+  * `d`: The cavity length (between lossy shorting plates) in inches.
+  * `a`: The cavity radius in inches.
+  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
+- `Rs`: The cavity wall surface resistance in ohms.
+- `ϵᵣ, tanδ`: The dielectric constant and loss tangent of the inserted dielectric sample.
+- `fghz`: The frequency in GHz.
+
+## Return Value
+- `smat`: The complex scattering matrix measured between the two rectangular waveguides at each end.
+"""                       
+function sim_cavity_smat(geom, Rs, ϵᵣ, tanδ, fghz)
+    cz = zero(ComplexF64)
+    rootepsr = sqrt(ϵᵣ)
+
+    # Region 1 (vacuum) parameters:
+    k1 = kcalc(fghz)           # wavenumber (radians/inch)
+    η1 = η₀
+    β1 = βcalc(k1, geom.a, Rs/η1)  # Guide propagation constant (radians/inch)
+    #Zh1 = k1 / β1 * η1        # Modal impedance
+
+    # Region 2 (dielectric sample) parameters:
+    k2 = kcalc(fghz, ϵᵣ, tanδ)
+    η2 = η1 / rootepsr
+    β2 = βcalc(k2, geom.a, real(Rs/η2))
+    #Zh2 = k2 / β2 * η2  # Modal impedance
+    
+    # Cascade calculations...
+    S = sr2chfss()
+
+    # First Region 1 interval:
+    t = cis(-β1 * geom.z1)
+    b = @SMatrix [cz t; t cz]
+    S = cascade(S, b)
+
+    # Region 1->2 Interface Plane:
+    den = β1 + β2
+    b11 = (β1 - β2) / den
+    b12 = 2 * sqrt(β1) * sqrt(β2) / den # Two sqrts to avoid subtle bug in complex domain
+    b = @SMatrix [b11 b12; b12 -b11]
+    S = cascade(S, b)
+
+    # Region 2 propagation:
+    t = cis(-β2 * (geom.z2 - geom.z1))
+    b = @SMatrix [cz t; t cz]
+    S = cascade(S, b)
+
+    # Region 2->1 Interface Plane (note sign changes of s11, s22):
+    b = @SMatrix [-b11 b12; b12 b11]
+    S = cascade(S, b)
+
+    # Final Region 1 interval:
+    t = cis(-β1 * (geom.d - geom.z2))
+    b = @SMatrix [cz t; t cz]
+    S = cascade(S, b)
+
+    # Transition from circular to rectangular waveguide:
+    Sr2c = sr2chfss()
+    b = @SMatrix [Sr2c[2,2] Sr2c[2,1]; Sr2c[1,2] Sr2c[1,1]]
+    S = cascade(S, b)
+    return S
+end
+
+
+function findfres(geom2, Rs, ϵᵣ, tanδ, fstart; rhoend=1e-12)
+    Sstart = sim_cavity_smat(geom2, Rs, ϵᵣ, tanδ, fstart)
+    tstart = abs(Sstart[1,2])
+    x, info = newuoa([0.0]; rhoend) do x
+        fghz = 1e-3 * x[1] * fstart + fstart
+        S = sim_cavity_smat(geom2, Rs, ϵᵣ, tanδ, fghz)
+        s12abs = abs(S[1,2])
+        return tstart / s12abs
+    end
+    fopt = 1e-3 * x[1] * fstart + fstart
+    return fopt, info
+end
+
+function findf1(geom2, Rs, ϵᵣ, tanδ, fres; rhoend=1e-12)
+    Sres = sim_cavity_smat(geom2, Rs, ϵᵣ, tanδ, fres)
+    tgoal = inv(sqrt(2)) * abs(Sres[1,2])
+    x, info = newuoa([0.0]; rhoend) do x
+        fghz = (1 - 1e-6 * x[1]^2) * fres
+        S = sim_cavity_smat(geom2, Rs, ϵᵣ, tanδ, fghz)
+        s12abs = abs(S[1,2])
+        return (s12abs - tgoal)^2
+    end
+    fopt = (1 - 1e-6 * x[1]^2) * fres
+    return fopt, info
+end
+
+function findf2(geom2, Rs, ϵᵣ, tanδ, fres; rhoend=1e-12)
+    Sres = sim_cavity_smat(geom2, Rs, ϵᵣ, tanδ, fres)
+    tgoal = inv(sqrt(2)) * abs(Sres[1,2])
+    x, info = newuoa([0.0]; rhoend) do x
+        fghz = (1 + 1e-6 * x[1]^2) * fres
+        S = sim_cavity_smat(geom2, Rs, ϵᵣ, tanδ, fghz)
+        s12abs = abs(S[1,2])
+        return (s12abs - tgoal)^2
+    end
+    fopt = (1 + 1e-6 * x[1]^2) * fres
+    return fopt, info
+end
+
+
+"""
+    findfresQ(geom, Rs, ϵᵣ, tanδ, fstart) -> (; fres, Q)
+
+Find the resonant frequency and Q of the given model.
+
+## Input Arguments
+- `geom`: A named tuple with the following fields:
+  * `d`: The cavity length (between lossy shorting plates) in inches.
+  * `a`: The cavity radius in inches.
+  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
+- `Rs`: The cavity wall surface resistance in ohms.
+- `ϵᵣ, tanδ`: The dielectric constant and loss tangent of the inserted dielectric sample.
+- `fstart`: The initial guess at resonant frequency in GHz.
+"""
+function findfresQ(geom, Rs, ϵᵣ, tanδ, fstart)
+    fres, infores = findfres(geom, Rs, ϵᵣ, tanδ, fstart)
+    f1, info1 = findf1(geom, Rs, ϵᵣ, tanδ, fres)
+    f2, info2 = findf2(geom, Rs, ϵᵣ, tanδ, fres)
+    Q = fres / (f2 - f1)
+    return (; fres, Q)
+end
+
+end # module
