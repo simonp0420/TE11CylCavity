@@ -1,6 +1,6 @@
 module TE11CylCavity
 
-using StaticArrays
+using StaticArrays: @SMatrix
 using PRIMA: newuoa
 using Dierckx: Dierckx # Spline1D and derivative
 using Roots: Roots  # find_zero
@@ -26,6 +26,23 @@ const η₀ = sqrt(μ₀ / ϵ₀)
 
 
 include("read_touchstone.jl")
+
+
+"""
+    σ2Rs(σmks, fghz) -> Rs
+
+Calculate surface resistance from conductivity and frequency.
+## Input Arguments
+- `σmks`: Metal bulk conductivity in MKS units [Siemen/meter]
+- `fghz`: Frequency in GHz
+## Return Value
+- `Rs`: Metal surface resistance in Ohms
+"""
+function σ2Rs(σmks, fghz)
+    ω = 2π * fghz * 1e9 # [radian/s]
+    Rs = sqrt(ω * μ₀ / 2σmks) # [Ohm]
+    return Rs
+end
 
 
 
@@ -55,12 +72,14 @@ function kcocalc(a)
 end
 
 """
-    βcalc(k, a, Rsnorm)
-Compute the complex propagation constant for the TE11 mode in a circular waveguide of radius `a`.
+    βcalc(k, a, Rsnorm) -> β
+Compute the complex propagation constant β for the TE11 mode in a circular waveguide of radius `a`.
 ## Input Arguments
 - `k`: The medium instrinsic wavenumber (radians/inch). 
-- `a`: The radius of the cylindrical waveguide (inches)
-- `Rsnorm`: The ratio of the Rs to the intrinsic impedance of the medium, where Rs is the surface resistance.
+- `a`: The radius of the cylindrical waveguide (inches).
+- `Rsnorm`: The ratio Rs/η, where Rs is the metal surface resistance and η is the intrinsic impedance of the medium.
+## Return Value
+- `β`: Complex propagation constant [radians/inch] such that `cis(-β*z)` is the z-dependence of a positive-going wave.
 """
 function βcalc(k, a, Rsnorm)
     kco = kcocalc(a)
@@ -166,13 +185,35 @@ function sim_cavity_smat(geom, Rs, ϵᵣ, tanδ, fghz)
     return S
 end
 
+"""
+    findfres(geom, σ, ϵᵣ, tanδ, fstart; rhoend=1e-12) -> fres, info
 
-function findfres(geom2, Rs, ϵᵣ, tanδ, fstart; rhoend=1e-12)
-    Sstart = sim_cavity_smat(geom2, Rs, ϵᵣ, tanδ, fstart)
+Find the cavity resonant frequency where |S₁₂| is a maximum.
+
+## Positional Arguments
+- `geom`: A named tuple with the following fields:
+  * `d`: The cavity length (between lossy shorting plates) in inches.
+  * `a`: The cavity radius in inches.
+  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
+- `σ`: The bulk conductivity of the cavity wall in MKS units [S/m].
+- `ϵᵣ, tanδ`: The dielectric constant and loss tangent of the inserted dielectric sample.
+- `fstart`: The initial guess for the resonant frequency in GHz.
+
+## Optional Keyword Arguments
+- `rhoend`: Used as the `rhoend` argument to the `PRIMA.newuoa` function. 
+
+## Return Values
+- `fres`: An estimate for the resonant frequency in GHz.
+- `info`: The `info` struct returned by `PRIMA.newuoa`.
+"""
+function findfres(geom, σ, ϵᵣ, tanδ, fstart; rhoend=1e-12)
+    Rsstart = σ2Rs(σ, fstart)
+    Sstart = sim_cavity_smat(geom, Rsstart, ϵᵣ, tanδ, fstart)
     tstart = abs(Sstart[1,2])
     x, info = newuoa([0.0]; rhoend) do x
-        fghz = 1e-3 * x[1] * fstart + fstart
-        S = sim_cavity_smat(geom2, Rs, ϵᵣ, tanδ, fghz)
+        fghz = 1e-3 * x[1] * fstart + fstart # Unscale the objective variable
+        Rs = σ2Rs(σ, fghz)
+        S = sim_cavity_smat(geom, Rs, ϵᵣ, tanδ, fghz)
         s12abs = abs(S[1,2])
         return tstart / s12abs
     end
@@ -180,12 +221,35 @@ function findfres(geom2, Rs, ϵᵣ, tanδ, fstart; rhoend=1e-12)
     return fopt, info
 end
 
-function findf1(geom2, Rs, ϵᵣ, tanδ, fres; rhoend=1e-12)
-    Sres = sim_cavity_smat(geom2, Rs, ϵᵣ, tanδ, fres)
+"""
+    findf1(geom, σ, ϵᵣ, tanδ, fres; rhoend=1e-12) -> f1, info
+
+Find the cavity lower half-power frequency where |S₁₂|² is 1/2 of its maximum (resonance) value.
+
+## Positional Arguments
+- `geom`: A named tuple with the following fields:
+  * `d`: The cavity length (between lossy shorting plates) in inches.
+  * `a`: The cavity radius in inches.
+  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
+- `σ`: The bulk conductivity of the cavity wall in MKS units [S/m].
+- `ϵᵣ, tanδ`: The dielectric constant and loss tangent of the inserted dielectric sample.
+- `fres`: The resonant frequency in GHz, where |S₁₂| takes its maximum value.
+
+## Optional Keyword Arguments
+- `rhoend`: Used as the `rhoend` argument to the `PRIMA.newuoa` function. 
+
+## Return Values
+- `f1`: An estimate for the lower 1/2 power frequency in GHz.
+- `info`: The `info` struct returned by `PRIMA.newuoa`.
+"""
+function findf1(geom, σ, ϵᵣ, tanδ, fres; rhoend=1e-12)
+    Rsres = σ2Rs(σ, fres)
+    Sres = sim_cavity_smat(geom, Rsres, ϵᵣ, tanδ, fres)
     tgoal = inv(sqrt(2)) * abs(Sres[1,2])
     x, info = newuoa([0.0]; rhoend) do x
         fghz = (1 - 1e-6 * x[1]^2) * fres
-        S = sim_cavity_smat(geom2, Rs, ϵᵣ, tanδ, fghz)
+        Rs = σ2Rs(σ, fghz)
+        S = sim_cavity_smat(geom, Rs, ϵᵣ, tanδ, fghz)
         s12abs = abs(S[1,2])
         return (s12abs - tgoal)^2
     end
@@ -193,11 +257,34 @@ function findf1(geom2, Rs, ϵᵣ, tanδ, fres; rhoend=1e-12)
     return fopt, info
 end
 
-function findf2(geom2, Rs, ϵᵣ, tanδ, fres; rhoend=1e-12)
-    Sres = sim_cavity_smat(geom2, Rs, ϵᵣ, tanδ, fres)
+"""
+    findf2(geom, σ, ϵᵣ, tanδ, fres; rhoend=1e-12) -> f2, info
+
+Find the cavity upper half-power frequency where |S₁₂|² is 1/2 of its maximum (resonance) value.
+
+## Positional Arguments
+- `geom`: A named tuple with the following fields:
+  * `d`: The cavity length (between lossy shorting plates) in inches.
+  * `a`: The cavity radius in inches.
+  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
+- `σ`: The bulk conductivity of the cavity wall in MKS units [S/m].
+- `ϵᵣ, tanδ`: The dielectric constant and loss tangent of the inserted dielectric sample.
+- `fres`: The resonant frequency in GHz, where |S₁₂| takes its maximum value.
+
+## Optional Keyword Arguments
+- `rhoend`: Used as the `rhoend` argument to the `PRIMA.newuoa` function. 
+
+## Return Values
+- `f2`: An estimate for the upper 1/2 power frequency in GHz.
+- `info`: The `info` struct returned by `PRIMA.newuoa`.
+"""
+function findf2(geom2, σ, ϵᵣ, tanδ, fres; rhoend=1e-12)
+    Rsres = σ2Rs(σ, fres)
+    Sres = sim_cavity_smat(geom2, Rsres, ϵᵣ, tanδ, fres)
     tgoal = inv(sqrt(2)) * abs(Sres[1,2])
     x, info = newuoa([0.0]; rhoend) do x
         fghz = (1 + 1e-6 * x[1]^2) * fres
+        Rs = σ2Rs(σ, fghz)
         S = sim_cavity_smat(geom2, Rs, ϵᵣ, tanδ, fghz)
         s12abs = abs(S[1,2])
         return (s12abs - tgoal)^2
@@ -208,7 +295,7 @@ end
 
 
 """
-    findfresQ(geom, Rs, ϵᵣ, tanδ, fstart) -> (; fres, Q)
+    findfresQ(geom, σ, ϵᵣ, tanδ, fstart) -> (; fres, Q)
 
 Find the resonant frequency and Q of the given model.
 
@@ -217,14 +304,14 @@ Find the resonant frequency and Q of the given model.
   * `d`: The cavity length (between lossy shorting plates) in inches.
   * `a`: The cavity radius in inches.
   * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
-- `Rs`: The cavity wall surface resistance in ohms.
+- `σ`: The cavity wall conductivity in Siemen/meter.
 - `ϵᵣ, tanδ`: The dielectric constant and loss tangent of the inserted dielectric sample.
 - `fstart`: The initial guess at resonant frequency in GHz.
 """
-function findfresQ(geom, Rs, ϵᵣ, tanδ, fstart)
-    fres, infores = findfres(geom, Rs, ϵᵣ, tanδ, fstart)
-    f1, info1 = findf1(geom, Rs, ϵᵣ, tanδ, fres)
-    f2, info2 = findf2(geom, Rs, ϵᵣ, tanδ, fres)
+function findfresQ(geom, σ, ϵᵣ, tanδ, fstart)
+    fres, infores = findfres(geom, σ, ϵᵣ, tanδ, fstart)
+    f1, info1 = findf1(geom, σ, ϵᵣ, tanδ, fres)
+    f2, info2 = findf2(geom, σ, ϵᵣ, tanδ, fres)
     Q = fres / (f2 - f1)
     return (; fres, Q)
 end
