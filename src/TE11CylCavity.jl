@@ -316,4 +316,130 @@ function findfresQ(geom, σ, ϵᵣ, tanδ, fstart)
     return (; fres, Q)
 end
 
+"""
+findσd(geom, fresgoal, Qgoal, σstart) -> (; σ, d, info)
+
+Adjust conductivity and cylinder length (slightly) to yield the desired resonant frequency and Q of empty cavity.
+
+The idea is to slightly adjust the wall conductivity and cavity length so that the S-parameter model produces
+exactly the same resonant frequency and Q as measured.  These updated values can then be used when seeking the
+dielectric constant and loss tangent corresponding to measured resonant frequency and Q with the sample inserted.
+
+## Input Arguments
+- `geom`: A named tuple with the following fields:
+  * `d`: The cavity length (between lossy shorting plates) in inches.
+  * `a`: The cavity radius in inches.
+  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
+    For this function these are immaterial, since the analysis will assume vacuum electrical parameters in the sample region.
+- `fresgoal`: The desired empty cavity resonant frequency in GHz.
+- `Qgoal`: The desired empty cavity quality factor.
+- `σstart`: An initial guess for the cavity wall conductivity in Siemen/meter.
+
+## Return Value
+A named tuple with the following fields:
+- `σ`: The optimized conductivity [S/m].
+- `d`: The optimized cavity length [inch].
+- `info`: The `info` struct returned by `PRIMA.newuo`
+"""
+function findσd(geom, fresgoal, Qgoal, σstart)
+    rhobeg = 0.1
+    rhoend = 1e-12
+    dstart = geom.d
+    x, info = newuoa([1.0, 1.0]; rhobeg, rhoend) do x
+        ϵᵣ = 1.0
+        tanδ = 0.0
+        σ = x[1]^2 * σstart
+        d = x[2]^2 * dstart
+        geomtest = merge(geom, (; d))
+        (; fres, Q) = findfresQ(geomtest, σ, ϵᵣ, tanδ, fresgoal)
+        objective = sqrt(1e6 * (fres - fresgoal)^2 + 1e-6 * (Q - Qgoal)^2)
+        return objective
+    end
+    σ = x[1]^2 * σstart
+    d = x[2]^2 * dstart
+    return (; σ, d, info)
+
+end
+
+"""
+findσa(geom, fresgoal, Qgoal, σstart) -> (; σ, a, info)
+
+Adjust conductivity and cylinder radius (slightly) to yield the desired resonant frequency and Q of empty cavity.
+
+The idea is to slightly adjust the wall conductivity and cavity radius so that the S-parameter model produces
+exactly the same resonant frequency and Q as measured.  These updated values can then be used when seeking the
+dielectric constant and loss tangent corresponding to measured resonant frequency and Q with the sample inserted.
+
+## Input Arguments
+- `geom`: A named tuple with the following fields:
+  * `d`: The cavity length (between lossy shorting plates) in inches.
+  * `a`: The cavity radius in inches.
+  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
+    For this function these are immaterial, since the analysis will assume vacuum electrical parameters in the sample region.
+- `fresgoal`: The desired empty cavity resonant frequency in GHz.
+- `Qgoal`: The desired empty cavity quality factor.
+- `σstart`: An initial guess for the cavity wall conductivity in Siemen/meter.
+
+## Return Value
+A named tuple with the following fields:
+- `σ`: The optimized conductivity [S/m].
+- `a`: The optimized cavity radius [inch].
+- `info`: The `info` struct returned by `PRIMA.newuo`
+"""
+function findσa(geom, fresgoal, Qgoal, σstart)
+    rhobeg = 0.1
+    rhoend = 1e-12
+    astart = geom.a
+    x, info = newuoa([1.0, 1.0]; rhobeg, rhoend) do x
+        ϵᵣ = 1.0
+        tanδ = 0.0
+        σ = x[1]^2 * σstart
+        a = x[2]^2 * astart
+        geomtest = merge(geom, (; a))
+        (; fres, Q) = findfresQ(geomtest, σ, ϵᵣ, tanδ, fresgoal)
+        objective = sqrt(1e6 * (fres - fresgoal)^2 + 1e-6 * (Q - Qgoal)^2)
+        return objective
+    end
+    σ = x[1]^2 * σstart
+    a = x[2]^2 * astart
+    return (; σ, a, info)
+
+end
+
+
+"""
+    findet(geom, σ, fresgoal, Qgoal) -> (; ϵᵣ, tanδ, info)
+
+Determine sample dielectric constan and loss tangent to yield the desired resonant frequency and Q cavity with sample.
+
+## Input Arguments
+- `geom`: A named tuple with the following fields:
+  * `d`: The cavity length (between lossy shorting plates) in inches.
+  * `a`: The cavity radius in inches.
+  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
+- `σ`: The wall conductivity in S/m.
+- `fresgoal`: The desired empty cavity resonant frequency in GHz.
+- `Qgoal`: The desired empty cavity quality factor.
+
+## Return Value
+A named tuple with the following fields:
+- `ϵᵣ`: An estimate of the dielectric constant of the sample.
+- `tanδ`: An estimate of the loss tangent of the sample.
+- `info`: The `info` struct returned by `PRIMA.newuo`
+"""
+function findet(geom, σ, fresgoal, Qgoal)
+    rhobeg = 4.0
+    rhoend = 1e-13
+    x, info = newuoa([0.0, 0.0]; rhobeg, rhoend) do x
+        ϵᵣ = 1.0 + x[1]^2
+        tanδ = x[2]^2
+        (; fres, Q) = findfresQ(geom, σ, ϵᵣ, tanδ, fresgoal)
+        objective = sqrt(1e6 * (fres - fresgoal)^2 + 1e-6 * (Q - Qgoal)^2)
+        return objective
+    end
+    ϵᵣ = 1.0 + x[1]^2
+    tanδ = x[2]^2
+    return (; ϵᵣ, tanδ, info)
+end
+
 end # module
