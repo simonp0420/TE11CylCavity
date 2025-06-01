@@ -1,6 +1,6 @@
 # TE11CylCavity - Find ϵᵣ and Q for dielectric sample inserted in a TE₁₁ₚ cavity
 
-# Summary as of 5/30/2025: Comparing to CST for Case2 Geometry
+## Summary as of 5/30/2025: Comparing to CST for Case2 Geometry
 For case2, the best results for obtaining the actual CST dielectric constant and loss tangent are
 obtained using test_findcase2fresQ.jl, compared to test2_findcase2fresQ.jl and test3_findcase2fresQ.jl.
 For the best method the conductivity and cavity length are first adjusted slightly so that the S-parameter
