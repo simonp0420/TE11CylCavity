@@ -20,8 +20,8 @@ t =  Cav.findσd(geom, fresgoal, Qgoal, σstart)
 
 println("σ and d optimized to produce same resonant frequency and Q as CST for empty cavity:")
 dstart = geom.d
-@show (;σstart, σopt)
-@show (; dstart, dopt)
+println((;σstart, σopt))
+println((; dstart, dopt))
 
 # Case 0: Empty Cavity
 geomopt = merge(geom, (; d=dopt))
@@ -33,13 +33,13 @@ println("With adjusted σ and d, S-parameter model prediction for empty cavity:"
 @show case0adj
 
 
-fQpredicted = Cav.findet(geomopt, σopt, fQ.fres, fQ.Q)
+etpredicted = Cav.findet(geomopt, σopt, fQ.fres, fQ.Q)
 println()
 println("Sample parameters predicted solely from CST resonant frequency and Q:")
-@show fQpredicted
+println(etpredicted)
 
 
-casenew = Cav.findfresQ(geomopt, σopt, fQpredicted.ϵᵣ, fQpredicted.tanδ, fresgoal)
+casenew = Cav.findfresQ(geomopt, σopt, etpredicted.ϵᵣ, fQpredicted.tanδ, fresgoal)
 println()
 println("Estimated dielectric properties produce these errors:")
 @show (fresgoal, casenew.fres - fresgoal)
