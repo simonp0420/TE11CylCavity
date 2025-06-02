@@ -106,13 +106,51 @@ function cascade(a, b)
     return c
 end
 
-"""
-    sr2chfss
-Return the midband 2x2 S matrix of the lossy transition from rectangular (port 1) to circular 
-(port 2) waveguide obtained from HFSS simulation.
-"""
-sr2chfss() = @SMatrix [0.998358*cis(deg2rad(177.2))   0.015691*cis(deg2rad(87.14))
-                       0.015691*cis(deg2rad(87.14))   0.998563*cis(deg2rad(178.48))]
+
+let s11r, s11i, s12r, s12i, s22r, s22i, flow, fhigh, fname # Establish a new hard scope 
+
+    global srect2cyl, setup_transition
+
+    """
+        setup_transition(filename::AbstractString)
+
+    Read in the 2-port scattering parameters from the Touchstone file specified 
+    by `filename`.  Set up for cubic spline interpolation of the scattering parameters
+    over frequency to be performed by `srect2cyl`
+
+    """
+    function setup_transition(filename::AbstractString)
+        fname = filename
+        (; comments, FGHz, Smat) = read_touchstone(filename)
+        flow, fhigh = first(FGHz), last(FGHz)
+        s11r = Dierckx.Spline1D(FGHz, real.(@view Smat[1,1,:]), k=3, bc="extrapolate")
+        s12r = Dierckx.Spline1D(FGHz, real.(@view Smat[1,2,:]), k=3, bc="extrapolate")
+        s22r = Dierckx.Spline1D(FGHz, real.(@view Smat[2,2,:]), k=3, bc="extrapolate")
+        s11i = Dierckx.Spline1D(FGHz, imag.(@view Smat[1,1,:]), k=3, bc="extrapolate")
+        s12i = Dierckx.Spline1D(FGHz, imag.(@view Smat[1,2,:]), k=3, bc="extrapolate")
+        s22i = Dierckx.Spline1D(FGHz, imag.(@view Smat[2,2,:]), k=3, bc="extrapolate")
+    end
+
+    """
+        srect2cyl(f)
+    Return the 2x2 S matrix of the lossy transition from rectangular (port 1) to circular 
+    (port 2) waveguide at frequency `f` (in GHz) obtained via cubic spline interpolation into
+    the S-parameter data established by by `setup_transition`.
+    """
+    function srect2cyl(f)
+        flow ≤ f ≤ fhigh || 
+          @warn """Requested frequency $f is outside interval [$flow,$fhigh] covered by $fname)
+                   Continuing with extrapolation. This warning will only be displayed once"""  maxlog=1
+        s11 = complex(s11r(f), s11i(f))
+        s12 = complex(s12r(f), s12i(f))
+        s22 = complex(s22r(f), s22i(f))
+        S = @SMatrix [s11 s12; s12 s22]  
+        #S = @SMatrix [0.998358*cis(deg2rad(177.2))   0.015691*cis(deg2rad(87.14))
+        #               0.015691*cis(deg2rad(87.14))   0.998563*cis(deg2rad(178.48))]
+        return S
+    end
+
+end # let
 
 
                        
@@ -149,8 +187,9 @@ function sim_cavity_smat(geom, Rs, ϵᵣ, tanδ, fghz)
     β2 = βcalc(k2, geom.a, real(Rs/η2))
     #Zh2 = k2 / β2 * η2  # Modal impedance
     
-    # Cascade calculations...
-    S = sr2chfss()
+    # Begin cascade calculations...
+    Sr2c = srect2cyl(fghz) # Rectangular to circular wg transition
+    S = Sr2c
 
     # First Region 1 interval:
     t = cis(-β1 * geom.z1)
@@ -179,7 +218,6 @@ function sim_cavity_smat(geom, Rs, ϵᵣ, tanδ, fghz)
     S = cascade(S, b)
 
     # Transition from circular to rectangular waveguide:
-    Sr2c = sr2chfss()
     b = @SMatrix [Sr2c[2,2] Sr2c[2,1]; Sr2c[1,2] Sr2c[1,1]]
     S = cascade(S, b)
     return S
