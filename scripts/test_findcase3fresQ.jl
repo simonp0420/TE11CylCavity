@@ -1,13 +1,12 @@
-# Case2a: Here we adjust the cavity length and conductivity to agree with CST empty cavity result
-geom = (a = 0.35, d = 3.5, z1 = 0.5, z2 = 0.55)
+# Case3: Here we adjust the cavity length and conductivity to agree with CST empty cavity result
+geom = (a = 0.35, d = 3.5, z1 = 0.73, z2 = 0.78)
 fQ0 = (; fres = 15.3791, Q = 1813.12) # CST for empty cavity
-fQ = (; fres = 15.3355, Q = 1650.81) # CST for case2a dielectric sample
+fQ = (; fres = 14.7615, Q = 1555.84) # CST for case3 dielectric sample
 σstart = 644_000 # Inconel wall conductivity S/m
 
 using TE11CylCavity: TE11CylCavity as Cav
 
 Cav.setup_transition(joinpath(@__DIR__, "rwgcwg_transition.s2p"))
-println("Case 2a")
 
 fghzstart = fQ0.fres
 
@@ -33,21 +32,18 @@ println()
 println("With adjusted σ and d, S-parameter model prediction for empty cavity:")
 @show case0adj
 
-# Case 2a:
-#ϵᵣ = 5.7
-#tanδ = 0.003
+
 fQpredicted = Cav.findet(geomopt, σopt, fQ.fres, fQ.Q)
 println()
-println("""Sample parameters predicted solely from CST resonant frequency and Q:
-           (compare to actuals: ϵᵣ=5.7, tanδ=0.003)""")
+println("Sample parameters predicted solely from CST resonant frequency and Q:")
 @show fQpredicted
 
 
-case2a = Cav.findfresQ(geomopt, σopt, fQpredicted.ϵᵣ, fQpredicted.tanδ, fresgoal)
+casenew = Cav.findfresQ(geomopt, σopt, fQpredicted.ϵᵣ, fQpredicted.tanδ, fresgoal)
 println()
 println("Estimated dielectric properties produce these errors:")
-@show (fresgoal, case2a.fres - fresgoal)
-@show (Qgoal, case2a.Q - Qgoal)
+@show (fresgoal, casenew.fres - fresgoal)
+@show (Qgoal, casenew.Q - Qgoal)
 
 
 nothing
