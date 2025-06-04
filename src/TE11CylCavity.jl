@@ -466,7 +466,7 @@ A named tuple with the following fields:
 - `info`: The `info` struct returned by `PRIMA.newuo`
 """
 function findet(geom, σ, fresgoal, Qgoal)
-    rhobeg = 4.0
+    rhobeg = 1.0
     rhoend = 1e-13
     x, info = newuoa([0.0, 0.0]; rhobeg, rhoend) do x
         ϵᵣ = 1.0 + x[1]^2
