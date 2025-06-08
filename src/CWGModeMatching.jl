@@ -5,6 +5,9 @@ Mode matching module for circular waveguides with m = 1 azimuthal variation.
 """
 module CWGModeMatching
 
+export CWG, setup_modes!, cascade
+
+
 include("J1Jp_roots.jl")
 
 using SpecialFunctions: besselj0, besselj1, besselj
@@ -14,8 +17,8 @@ include("Constants.jl")
 using .Constants: c₀, η₀
 
 include("GSMs.jl")
-using .GSMs: GSM
-
+using .GSMs: GSMs, GSM
+import .GSMs: cascade
 
 @enum TETM::Bool TE=true TM=false
 
@@ -42,6 +45,22 @@ default to zero.
     Z::ComplexF64 = zero(ComplexF64)# complex mode impedance normalized to η₀
 end
 
+"""
+    CWG
+A struct describing a section of metallic circular waveguide.
+
+## Fields
+- `a::Float64`: Inner radius [inch]
+- `l::Float64`: Section length [inch]
+- `ϵᵣ`::Float64`: Dielectric constant of the medium filling the guide.
+- `tanδ`::Float64`: Loss tangent of the medium filling the guide.
+- `σ::Float64`: Wall conductivity [S/m]
+- `modes::Vector{Mode}`: List of modes considered in this section of guide.
+
+## Constructor
+Constructors for `Mode` can use either keyword or positional arguments. `σ` and `modes` are both optional and will 
+default to `Int` and `Mode[]`, respectively.
+"""
 @kwdef struct CWG
     a::Float64  # Radius [inch]
     l::Float64  # Length [inch]
@@ -52,6 +71,17 @@ end
 end
 
 
+"""
+    mysqrt(x)
+
+Same as `sqrt` unless `sqrt(x)` is pure negative imaginary in which
+case it returns `-sqrt(x)` (i.e., positive pure imaginary).
+"""
+mysqrt(x) = sqrt(x)
+function mysqrt(z::Complex)
+    ans = sqrt(z)
+    return iszero(real(ans)) && imag(ans) < 0 ? -ans : ans
+end
 
 
 J1p(x) = (besselj0(x) - besselj(2, x)) / 2 # J1'(x)
@@ -146,7 +176,7 @@ function setup_modes!(c::CWG, fghz::Float64, nmodes::Int=length(c.modes))
     nmodeso2 = nmodes ÷ 2 # Number of TE modes (= number of TM modes)
     λ₀ = c₀ / fghz
     k₀ = 2π / λ₀
-    rootϵ = sqrt(c.ϵᵣ * complex(1.0, -c.tanδ)) 
+    rootϵ = mysqrt(c.ϵᵣ * complex(1.0, -c.tanδ)) 
     k = k₀ * rootϵ
     k² = k^2
     η = η₀ / rootϵ 
@@ -167,10 +197,10 @@ function setup_modes!(c::CWG, fghz::Float64, nmodes::Int=length(c.modes))
         mode = c.modes[q]
         mode.p == p || error("p mismatch for mode $q!")
         kco = mode.kcoa / r.a
-        γ = sqrt(kco^2 - k²)
+        γ = mysqrt(kco^2 - k²)
         ratio = (kco / real(k))^2
         if !iszero(Rs)
-            α = Rs / (c.a * real(η)) / sqrt(1 - ratio)  # attenuation due to metal loss
+            α = Rs / (c.a * real(η)) / mysqrt(1 - ratio)  # attenuation due to metal loss
             p == TE && (α *= (ratio + (kcoa/n)^-2))
             γ += α
         end
@@ -211,12 +241,12 @@ function compute_kappa_matrix!(c1::CWG, c2::CWG)
                     # Equation (19) of notes:
                     kappa[q2, q1] =
                         2 * cn2 * cn1 * Iint1(cn1, cn2 / t, J1chip[n1], J0chip[n1]) /
-                        (t * J1chip[n] * J1chip[n1] * sqrt(cn2^2 - 1) * sqrt(cn1^2 - 1))
+                        (t * J1chip[n] * J1chip[n1] * mysqrt(cn2^2 - 1) * mysqrt(cn1^2 - 1))
                 elseif mode2.p == TM
                     # Equation (21) of reference:
                     kappa[q2, q1] =
                         2 * besselj1(cn2 / t) * J1chip[n1] /
-                        (cn2 * sqrt(cn1^2 - 1) * J2chi[n] * J1chip[n1])
+                        (cn2 * mysqrt(cn1^2 - 1) * J2chi[n] * J1chip[n1])
                 end
             elseif mode1.p == TM
                 if mode2.p == TE
@@ -253,13 +283,10 @@ end
 
 function junction!(gsm::GSM, c1::CWG, c2::CWG, kappas::Matrix{Float64})
     # Compute scattering matrix entries for the junction of `c1` and `c2`. Ref. Eq. 15, 
-    # Obtain square roots of modal impedances:
-    rootZ1 = sqrt.(c1.Z)
-    rootZ2 = sqrt.(c2.Z)
 
     # Obtain number of modes on both sides of junction:
-    Nm1 = length(rootZ1)
-    Nm2 = length(rootZ2)
+    Nm1 = length(c1.Z)
+    Nm2 = length(c2.Z)
 
     # Use Eq. (15) to find P matrix:
     #P = Diagonal(rz2) * kappas * Diagonal(rz1)
@@ -294,6 +321,64 @@ function junction!(gsm::GSM, c1::CWG, c2::CWG, kappas::Matrix{Float64})
     gsm.S22 .= @view Srow2[:, (Nm1 + 1):end]
 
     return gsm
+end
+
+function junction(c1::CWG, c2::CWG, kappas::Matrix{Float64})
+    n1 = length(c1.modes)
+    n2 = length(c2.modes)
+    gsm = GSM(n1, n2)
+    return junction!(gsm, c1::CWG, c2::CWG, kappas::Matrix{Float64})
+end
+
+
+
+"""
+    propagate!(gsm, modes, l)
+
+Modify a GSM to reflect propagation of the the modes through a length `l`.
+## Arguments
+- `gsm`: A `GSM` compatible with `γs` such that `size(gsm.s22) .== length(modes)`. On exit `gsm` is modified.
+- `modes::AbstractVector{Mode}`: The modes to be propagated.  
+- `l`: The length [inch] through which the modes should propagate/attenuate.
+"""
+function propagate!(a::GSM, modes::AbstractVector{Mode}, l::Real)
+    n2 = size(a[2,2], 1)
+    n2 ≠ length(modes) && @error "# modes not consistent" n2 length(γs) exception = ErrorException
+    #  Loop over each of the modes:
+    for i in 1:n2
+        p = exp(-modes[i].γ * l)
+        a[1,2][:, i] .*= p
+        a[2,1][i, :] .*= p
+        a[2,2][:, i] .*= p
+        a[2,2][i, :] .*= p
+    end
+    return a
+end
+
+
+
+"""
+    cascade(c1::CWG, c2::CWG, kappas::Matrix=Float64[]) -> (gsm::GSM, kappas)
+
+Compute the GSM for the junction of two waveguide sections, including their lengths.
+
+## Input Arguments
+- `c1` and `c2`: The two circular waveguides.  It is assumed that the frequency-dependent 
+  `modes` vector in each of these has been updated for the current analysis frequency.
+- `kappas`: Optional kappa (frequency-independent mode coupling) matrix.  If empty (default),
+  it will be computed and returned to the caller in the return value of the function.
+"""
+function cascade(c1::CWG, c2::CWG, kappas::Matrix=Float64[])
+    isempty(kappas) && (kappas = compute_kappa_matrix!(c1::CWG, c2::CWG))
+    n1 = length(c1.modes)
+    n2 = length(c2.modes)
+    size(kappas) == (n2,n1) || error("Size error")
+    gsm = GSM(n1, n2)
+    propagate!(gsm, c1.modes, c1.l)
+    gsm2 = junction(c1, c2, kappas)
+    gsm = GSMs.cascade(gsm, gsm2)
+    propagate!(gsm, c2.modes, c2.l)
+    return gsm, kappas
 end
 
 end # module
