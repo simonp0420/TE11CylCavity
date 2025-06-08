@@ -2,10 +2,10 @@ module GSMs
 export GSM, cascade, cascade!, propagate!
 
 using LinearAlgebra
-
+using StaticArrays: SMatrix
 
 """
-    GSM{M,T} <: Any
+    GSM{T<:Number, M<:AbstractMatrix{T}} <: Any
 A struct for storing the partitions of a GSM (Generalized Scattering Matrix)
 
 ## Fields:
@@ -35,6 +35,26 @@ function GSM(n1::Int, n2::Int)
     gsm.s21[diagind(gsm.s21)] .= one(eltype(gsm.s21))
     gsm
 end
+
+"""
+    GSM(s11::Number, s12::Number, S21::Number, s22::Number)
+
+Convenience constructor for two-port network.
+## Arguments
+- `s11`, `s12`, `s21`, `s22`: The scalar entries in the scattering matrix. They can be entered either
+  as positional or keyword arguments.
+"""
+function GSM(s11::Number, s12::Number, s21::Number, s22::Number)
+    s11mat = SMatrix{1, 1, ComplexF64, 1}(s11)
+    s12mat = SMatrix{1, 1, ComplexF64, 1}(s12)
+    s21mat = SMatrix{1, 1, ComplexF64, 1}(s21)
+    s22mat = SMatrix{1, 1, ComplexF64, 1}(s22)
+    gsm = GSM(s11mat, s12mat, s21mat, s22mat)
+    return gsm
+end
+
+GSM(; s11::Number, s12::Number, s21::Number, s22::Number) = GSM(s11, s12, s21, s22)
+
 
 @inline function Base.getindex(gsm::GSM, i, j)
     (i, j) == (1, 1) && (return gsm.s11)
@@ -75,30 +95,6 @@ function cascade(a::GSM, b::GSM)
     s12 = a[1,2] * gprod2
     s22 = b[2,2] + (b[2,1] * a[2,2] * gprod2)
     return GSM(s11, s12, s21, s22)
-end
-
-
-"""
-    propagate!(a::GSM, γs::AbstractVector, l::Real)
-
-Propagate the modes through a length `l`.
-## Arguments
-- `a`: A `GSM` compatible with `γs` such that `size(a.s22) .== length(γs)`. On exit `a` is modified.
-- `γs`: A vector of attenuation constants compatible with `a`. Units must be the inverse of `l`s units.
-- `l`: The length through which the modes should propagate/attenuate. Units must be the inverse of `γs`s units.
-"""
-function cascade!(a::GSM, γs::AbstractVector, l::Real)
-    n2 = size(a[2,2], 1)
-    n2 ≠ length(γs) && @error "# modes not consistent" n2 length(γs) exception = ErrorException
-    #  Loop over each of the modes:
-    for i in 1:n2
-        p = exp(-γs[i] * l)
-        a[1,2][:, i] .*= p
-        a[2,1][i, :] .*= p
-        a[2,2][:, i] .*= p
-        a[2,2][i, :] .*= p
-    end
-    return a
 end
 
 
