@@ -14,7 +14,7 @@ using SpecialFunctions: besselj0, besselj1, besselj
 using LinearAlgebra: I, \, transpose, lu!, ldiv!, mul!
 
 include("Constants.jl")
-using .Constants: c₀, η₀
+using .Constants: c₀, η₀, μ₀
 
 include("GSMs.jl")
 using .GSMs: GSMs, GSM
@@ -149,6 +149,23 @@ function twoIplus!(M::Matrix)
     return M
 end
 
+"""
+    σ2Rs(σmks, fghz) -> Rs
+
+Calculate surface resistance from conductivity and frequency.
+## Input Arguments
+- `σmks`: Metal bulk conductivity in MKS units [Siemen/meter]
+- `fghz`: Frequency in GHz
+## Return Value
+- `Rs`: Metal surface resistance in Ohms
+"""
+function σ2Rs(σmks, fghz)
+    isinf(σmks) && return 0.0
+    ω = 2π * fghz * 1e9 # [radian/s]
+    Rs = sqrt(ω * μ₀ / 2σmks) # [Ohm]
+    return Rs
+end
+
 
 
 """
@@ -184,7 +201,7 @@ function setup_modes!(c::CWG, fghz::Float64, nmodes::Int=length(c.modes))
 
     if isempty(c.modes)
         # Initialize modes
-        for n in 1:nmodeso2,  (p, kcoa) in zip((TE, chip[n]), (TM, chi[n]))
+        for n in 1:nmodeso2,  (p, kcoa) in ((TE, chip[n]), (TM, chi[n]))
             mode = Mode(; n, p, kcoa)
             push!(c.modes, mode)
         end
@@ -196,7 +213,7 @@ function setup_modes!(c::CWG, fghz::Float64, nmodes::Int=length(c.modes))
         q += 1
         mode = c.modes[q]
         mode.p == p || error("p mismatch for mode $q!")
-        kco = mode.kcoa / r.a
+        kco = mode.kcoa / c.a
         γ = mysqrt(kco^2 - k²)
         ratio = (kco / real(k))^2
         if !iszero(Rs)
@@ -220,13 +237,12 @@ function compute_kappa_matrix!(c1::CWG, c2::CWG)
     modes1 = c1.modes
     modes2 = c2.modes
     N1, N2 = length.((modes1, modes2))
-    size(kappas) == (N2, N1) || throw(ArgumentError("size(P) not correct"))
-    t = c1.a / c2.a  # Radius ratio
+    t = c2.a / c1.a  # Radius ratio
     if t < 1
         error("c1 radius greater than c2 radius")
     end
 
-    kappas = zeros(Float64, n2, n1)  # Preallocation
+    kappas = zeros(Float64, N2, N1)  # Preallocation
 
     for q1 in 1:N1       # Loop over region I modes
         mode1 = modes1[q1]
@@ -239,22 +255,22 @@ function compute_kappa_matrix!(c1::CWG, c2::CWG)
             if mode1.p == TE
                 if mode2.p == TE
                     # Equation (19) of notes:
-                    kappa[q2, q1] =
+                    kappas[q2, q1] =
                         2 * cn2 * cn1 * Iint1(cn1, cn2 / t, J1chip[n1], J0chip[n1]) /
                         (t * J1chip[n] * J1chip[n1] * mysqrt(cn2^2 - 1) * mysqrt(cn1^2 - 1))
                 elseif mode2.p == TM
                     # Equation (21) of reference:
-                    kappa[q2, q1] =
+                    kappas[q2, q1] =
                         2 * besselj1(cn2 / t) * J1chip[n1] /
                         (cn2 * mysqrt(cn1^2 - 1) * J2chi[n] * J1chip[n1])
                 end
             elseif mode1.p == TM
                 if mode2.p == TE
-                    kappa[q2, q1] = 0.0  # Equation (20) of reference.
+                    kappas[q2, q1] = 0.0  # Equation (20) of reference.
                 #case TM
                 elseif mode2.p == TM
                     # Equation (22) of reference:
-                    kappa[q2, q1] =
+                    kappas[q2, q1] =
                         2 * Iint1(cn1, cn2 / t, 0.0, J0chi[n1]) /
                         (t * J2chi[n1] * J2chi[n])
                 end
@@ -285,20 +301,20 @@ function junction!(gsm::GSM, c1::CWG, c2::CWG, kappas::Matrix{Float64})
     # Compute scattering matrix entries for the junction of `c1` and `c2`. Ref. Eq. 15, 
 
     # Obtain number of modes on both sides of junction:
-    Nm1 = length(c1.Z)
-    Nm2 = length(c2.Z)
+    Nm1 = length(c1.modes)
+    Nm2 = length(c2.modes)
 
     # Use Eq. (15) to find P matrix:
     #P = Diagonal(rz2) * kappas * Diagonal(rz1)
     P = [complex(v) for v in kappas]
     for n in 1:Nm1
-        rZ1 = sqrt(c1.Z[n])
+        rZ1 = sqrt(c1.modes[n].Z)
         for m in 1:Nm2
             P[m, n] *= rZ1
         end
     end
     for m in 1:Nm2
-        rZ2inv = inv(sqrt(c2.Z[m]))
+        rZ2inv = inv(sqrt(c2.modes[m].Z))
         for n in 1:Nm1
             P[m, n] *= rZ2inv
         end
@@ -316,9 +332,9 @@ function junction!(gsm::GSM, c1::CWG, c2::CWG, kappas::Matrix{Float64})
     Srow2 = ldiv!(lu!(twoIplus!(PPt)), RHS)
 
     gsm.s11 .= @view Srow1[:, 1:Nm1]
-    gsm.S12 .= @view Srow1[:, (Nm1 + 1):end]
-    gsm.S21 .= @view Srow2[:, 1:Nm1]
-    gsm.S22 .= @view Srow2[:, (Nm1 + 1):end]
+    gsm.s12 .= @view Srow1[:, (Nm1 + 1):end]
+    gsm.s21 .= @view Srow2[:, 1:Nm1]
+    gsm.s22 .= @view Srow2[:, (Nm1 + 1):end]
 
     return gsm
 end
@@ -343,7 +359,7 @@ Modify a GSM to reflect propagation of the the modes through a length `l`.
 """
 function propagate!(a::GSM, modes::AbstractVector{Mode}, l::Real)
     n2 = size(a[2,2], 1)
-    n2 ≠ length(modes) && @error "# modes not consistent" n2 length(γs) exception = ErrorException
+    n2 ≠ length(modes) && @error "# modes not consistent" n2 length(modes) size(a[1,2]) exception = ErrorException
     #  Loop over each of the modes:
     for i in 1:n2
         p = exp(-modes[i].γ * l)
@@ -358,7 +374,7 @@ end
 
 
 """
-    cascade(c1::CWG, c2::CWG, kappas::Matrix=Float64[]) -> (gsm::GSM, kappas)
+    cascade(c1::CWG, c2::CWG, kappas::Matrix=zeros(0,0)) -> (gsm::GSM, kappas)
 
 Compute the GSM for the junction of two waveguide sections, including their lengths.
 
@@ -368,12 +384,12 @@ Compute the GSM for the junction of two waveguide sections, including their leng
 - `kappas`: Optional kappa (frequency-independent mode coupling) matrix.  If empty (default),
   it will be computed and returned to the caller in the return value of the function.
 """
-function cascade(c1::CWG, c2::CWG, kappas::Matrix=Float64[])
+function cascade(c1::CWG, c2::CWG, kappas::Matrix=zeros(0,0))
     isempty(kappas) && (kappas = compute_kappa_matrix!(c1::CWG, c2::CWG))
     n1 = length(c1.modes)
     n2 = length(c2.modes)
     size(kappas) == (n2,n1) || error("Size error")
-    gsm = GSM(n1, n2)
+    gsm = GSM(n1, n1)
     propagate!(gsm, c1.modes, c1.l)
     gsm2 = junction(c1, c2, kappas)
     gsm = GSMs.cascade(gsm, gsm2)
