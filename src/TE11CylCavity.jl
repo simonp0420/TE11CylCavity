@@ -1,12 +1,15 @@
 module TE11CylCavity
 
+export CWG, setup_modes!, cascade, junction, junction!, propagate!, setup_rect2cyl, setup_cyl2rect, scyl2rect, srect2cyl
+
 using StaticArrays: @SMatrix
 using PRIMA: newuoa
 using Dierckx: Dierckx # Spline1D and derivative
 using Roots: Roots  # find_zero
 
 include("CWGModeMatching.jl")
-using .CWGModeMatching: CWGModeMatching as cmm
+import .CWGModeMatching: cascade  # To be extended
+using .CWGModeMatching: CWG, setup_modes!, junction, junction!, propagate!, compute_kappa_matrix
 
 include("Constants.jl")
 using .Constants: c₀mks, c₀, μ₀, ϵ₀, η₀
@@ -86,7 +89,8 @@ end
 Cascade two-port circuits represented by the 2x2 scattering matrices `a` and `b`, and return result in `c`.
 Assumes that port 2 of `a` is connected to port 1 of `b`. 
 """
-function cascade(a, b)
+function cascade(a::AbstractMatrix, b::AbstractMatrix)
+    size(a) == size(b) == (2,2) || throw(ArgumentError("a and b must be 2×2 matrices"))
     den = 1 - a[2,2] * b[1,1]  
     c = @SMatrix [a[1,1]+a[1,2]*a[2,1]*b[1,1]/den   a[1,2]*b[2,1]/den
                   a[2,1]*b[1,2]/den                 b[2,2]+b[1,2]*b[2,1]*a[2,2]/den]
@@ -96,17 +100,17 @@ end
 
 let s11r, s11i, s12r, s12i, s22r, s22i, flow, fhigh, fname # Establish a new hard scope 
 
-    global srect2cyl, setup_transition
+    global srect2cyl, setup_rect2cyl
 
     """
-        setup_transition(filename::AbstractString)
+        setup_rect2cyl(filename::AbstractString)
 
     Read in the 2-port scattering parameters from the Touchstone file specified 
     by `filename`.  Set up for cubic spline interpolation of the scattering parameters
     over frequency to be performed by `srect2cyl`
 
     """
-    function setup_transition(filename::AbstractString)
+    function setup_rect2cyl(filename::AbstractString)
         fname = filename
         (; comments, FGHz, Smat) = read_touchstone(filename)
         flow, fhigh = first(FGHz), last(FGHz)
@@ -122,7 +126,9 @@ let s11r, s11i, s12r, s12i, s22r, s22i, flow, fhigh, fname # Establish a new har
         srect2cyl(f)
     Return the 2x2 S matrix of the lossy transition from rectangular (port 1) to circular 
     (port 2) waveguide at frequency `f` (in GHz) obtained via cubic spline interpolation into
-    the S-parameter data established by by `setup_transition`.
+    the S-parameter data established by by `setup_rect2cyl`.  It is assumed that this is
+    the end of the cavity where the spacer is inserted, so the circular waveguide radius
+    is that of the spacer inner radius.
     """
     function srect2cyl(f)
         flow ≤ f ≤ fhigh || 
@@ -132,8 +138,53 @@ let s11r, s11i, s12r, s12i, s22r, s22i, flow, fhigh, fname # Establish a new har
         s12 = complex(s12r(f), s12i(f))
         s22 = complex(s22r(f), s22i(f))
         S = @SMatrix [s11 s12; s12 s22]  
-        #S = @SMatrix [0.998358*cis(deg2rad(177.2))   0.015691*cis(deg2rad(87.14))
-        #               0.015691*cis(deg2rad(87.14))   0.998563*cis(deg2rad(178.48))]
+        return S
+    end
+
+end # let
+
+
+
+let s11r, s11i, s12r, s12i, s22r, s22i, flow, fhigh, fname # Establish a new hard scope 
+
+    global scyl2rect, setup_cyl2rect
+
+    """
+        setup_cyl2rect(filename::AbstractString)
+
+    Read in the 2-port scattering parameters from the Touchstone file specified 
+    by `filename`.  Set up for cubic spline interpolation of the scattering parameters
+    over frequency to be performed by `scyl2rect`.  
+
+    """
+    function setup_cyl2rect(filename::AbstractString)
+        fname = filename
+        (; comments, FGHz, Smat) = read_touchstone(filename)
+        flow, fhigh = first(FGHz), last(FGHz)
+        s11r = Dierckx.Spline1D(FGHz, real.(@view Smat[1,1,:]), k=3, bc="extrapolate")
+        s12r = Dierckx.Spline1D(FGHz, real.(@view Smat[1,2,:]), k=3, bc="extrapolate")
+        s22r = Dierckx.Spline1D(FGHz, real.(@view Smat[2,2,:]), k=3, bc="extrapolate")
+        s11i = Dierckx.Spline1D(FGHz, imag.(@view Smat[1,1,:]), k=3, bc="extrapolate")
+        s12i = Dierckx.Spline1D(FGHz, imag.(@view Smat[1,2,:]), k=3, bc="extrapolate")
+        s22i = Dierckx.Spline1D(FGHz, imag.(@view Smat[2,2,:]), k=3, bc="extrapolate")
+    end
+
+    """
+        scyl2rect(f)
+    Return the 2x2 S matrix of the lossy transition from circular (port 1) to rectangular
+    (port 2) waveguide at frequency `f` (in GHz) obtained via cubic spline interpolation into
+    the S-parameter data established by by `setup_cyl2rect`.   It is assumed that this is
+    the end of the cavity without the spacer, so the circular waveguide radius
+    is that of the larger cavity.
+    """
+    function scyl2rect(f)
+        flow ≤ f ≤ fhigh || 
+          @warn """Requested frequency $f is outside interval [$flow,$fhigh] covered by $fname)
+                   Continuing with extrapolation. This warning will only be displayed once"""  maxlog=1
+        s11 = complex(s11r(f), s11i(f))
+        s12 = complex(s12r(f), s12i(f))
+        s22 = complex(s22r(f), s22i(f))
+        S = @SMatrix [s11 s12; s12 s22]  
         return S
     end
 
@@ -142,103 +193,75 @@ end # let
 
                        
 """
-    sim_cavity_s21(geom, Rs, ϵᵣ, tanδ, fghz) -> smat
+    sim_cavity_smat!(cwgI, cwgD, cwgII, kappasID, kappasDII, fghz) -> smat
 
 Simulate the value of S₁₂ for a cylindrical cavity with dielectric sample inserted.
 
+Assumes that `setup_rect2cyl` and `setup_cyl2rect` have already been called to initialize data needed by 
+`scyl2rect` and `srect2cyl`.
+
 ## Input Arguments
-- `geom`: A named tuple with the following fields:
-  * `d`: The cavity length (between lossy shorting plates) in inches.
-  * `a`: The cavity radius in inches.
-  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
-- `Rs`: The cavity wall surface resistance in ohms.
-- `ϵᵣ, tanδ`: The dielectric constant and loss tangent of the inserted dielectric sample.
+- `cwgI::CWG`: A `CWG` describing the Region I circular waveguide (i.e., the spacer).
+- `cwgD::CWG`: A `CWG` describing the dielectric sample region of circular waveguide.
+- `cwgII::CWG`: A `CWG` describing the Region II circular waveguide (i.e., the cavity minus the spacer and dielectric region).
+- `kappas`:  Frequency-independent mode coupling matrix for the junction of `cwgI` and `cwgD`.
 - `fghz`: The frequency in GHz.
 
-## Return Value
-- `smat`: The complex scattering matrix measured between the two rectangular waveguides at each end.
+It is assumed that `cwgI`, `cwgII`, and `cwgD` have their `modes` field initialized, although they are not assumed to be 
+updated for the current frequency specified in `fghz`.  These fields will then be modified.
+
+    ## Return Value
+- `smat`: The complex 2×2 scattering matrix measured between the two rectangular waveguides at each end of the cavity.
 """                       
-function sim_cavity_smat(geom, Rs, ϵᵣ, tanδ, fghz)
-    cz = zero(ComplexF64)
-    rootepsr = sqrt(ϵᵣ)
-
-    # Region 1 (vacuum) parameters:
-    k1 = kcalc(fghz)           # wavenumber (radians/inch)
-    η1 = η₀
-    β1 = βcalc(k1, geom.a, Rs/η1)  # Guide propagation constant (radians/inch)
-    #Zh1 = k1 / β1 * η1        # Modal impedance
-
-    # Region 2 (dielectric sample) parameters:
-    k2 = kcalc(fghz, ϵᵣ, tanδ)
-    η2 = η1 / rootepsr
-    β2 = βcalc(k2, geom.a, real(Rs/η2))
-    #Zh2 = k2 / β2 * η2  # Modal impedance
-    
-    # Begin cascade calculations...
+function sim_cavity_smat!(cwgI::CWG, cwgD::CWG, cwgII::CWG, kappasID::Matrix{Float64}, kappasDII::Matrix{Float64}, fghz)
+    foreach(cwg -> setup_modes!(cwg, fghz), (cwgI, cwgD, cwgII)) # Update the modes for this frequency
+    # Multimode cascades:
+    SID, _ = cascade(cwgI, cwgD, kappasID)
+    SDII = junction(cwgD, cwgII, kappasDII)
+    propagate!(SDII, cwgII.modes, cwgII.l)
+    S = cascade(SID, SDII)
+    # Single-mode cascades:
+    S2x2 = @SMatrix [S[1,1][1,1] S[1,2][1,1] ; S[2,1][1,1] S[2,2][1,1]] # Retain only TE10 mode
     Sr2c = srect2cyl(fghz) # Rectangular to circular wg transition
-    S = Sr2c
-
-    # First Region 1 interval:
-    t = cis(-β1 * geom.z1)
-    b = @SMatrix [cz t; t cz]
-    S = cascade(S, b)
-
-    # Region 1->2 Interface Plane:
-    den = β1 + β2
-    b11 = (β1 - β2) / den
-    b12 = 2 * sqrt(β1) * sqrt(β2) / den # Two sqrts to avoid subtle bug in complex domain
-    b = @SMatrix [b11 b12; b12 -b11]
-    S = cascade(S, b)
-
-    # Region 2 propagation:
-    t = cis(-β2 * (geom.z2 - geom.z1))
-    b = @SMatrix [cz t; t cz]
-    S = cascade(S, b)
-
-    # Region 2->1 Interface Plane (note sign changes of s11, s22):
-    b = @SMatrix [-b11 b12; b12 b11]
-    S = cascade(S, b)
-
-    # Final Region 1 interval:
-    t = cis(-β1 * (geom.d - geom.z2))
-    b = @SMatrix [cz t; t cz]
-    S = cascade(S, b)
-
-    # Transition from circular to rectangular waveguide:
-    b = @SMatrix [Sr2c[2,2] Sr2c[2,1]; Sr2c[1,2] Sr2c[1,1]]
-    S = cascade(S, b)
-    return S
+    S2x2 = cascade(Sr2c, S2x2)
+    Sc2r = scyl2rect(fghz) # Circular to rectangular wg transition
+    S2x2 = cascade(S2x2, Sc2r)
+    return S2x2
 end
 
 """
-    findfres(geom, σ, ϵᵣ, tanδ, fstart; rhoend=1e-12) -> fres, info
+    findfres(cwgI::CWG, cwgD::CWG, cwgII::CWG, fstart; kappasID, kappasDII, rhoend=1e-12) -> fres, info
 
 Find the cavity resonant frequency where |S₁₂| is a maximum.
 
 ## Positional Arguments
-- `geom`: A named tuple with the following fields:
-  * `d`: The cavity length (between lossy shorting plates) in inches.
-  * `a`: The cavity radius in inches.
-  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
-- `σ`: The bulk conductivity of the cavity wall in MKS units [S/m].
-- `ϵᵣ, tanδ`: The dielectric constant and loss tangent of the inserted dielectric sample.
+- `cwgI`, `cwgD`, `cwgII`: `CWG` instances describing the Region I, Dielectric Sample, and Region II waveguides. The `modes`
+  field of each should be initialized.
 - `fstart`: The initial guess for the resonant frequency in GHz.
 
 ## Optional Keyword Arguments
+- `kappasID`, `kappasDII`: Frequency-independent coupling matrices for the Region I/Dielectric Sample and Dielectric Sample/Region II
+  interfaces, respectively.  If not passed they will be computed, at a cost of execution time.
 - `rhoend`: Used as the `rhoend` argument to the `PRIMA.newuoa` function. 
 
 ## Return Values
 - `fres`: An estimate for the resonant frequency in GHz.
 - `info`: The `info` struct returned by `PRIMA.newuoa`.
 """
-function findfres(geom, σ, ϵᵣ, tanδ, fstart; rhoend=1e-12)
-    Rsstart = σ2Rs(σ, fstart)
-    Sstart = sim_cavity_smat(geom, Rsstart, ϵᵣ, tanδ, fstart)
+function findfres(
+    cwgI::CWG,
+    cwgD::CWG,
+    cwgII::CWG,
+    fstart;
+    kappasID = compute_kappa_matrix(cwgI, cwgD),
+    kappasDII = compute_kappa_matrix(cwgD, cwgII),
+    rhoend = 1e-12)
+    
+    Sstart = sim_cavity_smat!(cwgI, cwgD, cwgII, kappasID, kappasDII, fstart)
     tstart = abs(Sstart[1,2])
     x, info = newuoa([0.0]; rhoend) do x
         fghz = 1e-3 * x[1] * fstart + fstart # Unscale the objective variable
-        Rs = σ2Rs(σ, fghz)
-        S = sim_cavity_smat(geom, Rs, ϵᵣ, tanδ, fghz)
+        S = sim_cavity_smat!(cwgI, cwgD, cwgII, kappasID, kappasDII, fghz)
         s12abs = abs(S[1,2])
         return tstart / s12abs
     end
@@ -247,34 +270,38 @@ function findfres(geom, σ, ϵᵣ, tanδ, fstart; rhoend=1e-12)
 end
 
 """
-    findf1(geom, σ, ϵᵣ, tanδ, fres; rhoend=1e-12) -> f1, info
+    findf1(cwgI, cwgD, cwgII, fres; kappasID, kappasDII, rhoend=1e-12) -> f1, info
 
 Find the cavity lower half-power frequency where |S₁₂|² is 1/2 of its maximum (resonance) value.
 
 ## Positional Arguments
-- `geom`: A named tuple with the following fields:
-  * `d`: The cavity length (between lossy shorting plates) in inches.
-  * `a`: The cavity radius in inches.
-  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
-- `σ`: The bulk conductivity of the cavity wall in MKS units [S/m].
-- `ϵᵣ, tanδ`: The dielectric constant and loss tangent of the inserted dielectric sample.
+- `cwgI`, `cwgD`, `cwgII`: `CWG` instances describing the Region I, Dielectric Sample, and Region II waveguides. The `modes`
+  field of each should be initialized.
 - `fres`: The resonant frequency in GHz, where |S₁₂| takes its maximum value.
 
 ## Optional Keyword Arguments
+- `kappasID`, `kappasDII`: Frequency-independent coupling matrices for the Region I/Dielectric Sample and Dielectric Sample/Region II
+  interfaces, respectively.  If not passed they will be computed, at a cost of execution time.
 - `rhoend`: Used as the `rhoend` argument to the `PRIMA.newuoa` function. 
 
 ## Return Values
 - `f1`: An estimate for the lower 1/2 power frequency in GHz.
 - `info`: The `info` struct returned by `PRIMA.newuoa`.
 """
-function findf1(geom, σ, ϵᵣ, tanδ, fres; rhoend=1e-12)
-    Rsres = σ2Rs(σ, fres)
-    Sres = sim_cavity_smat(geom, Rsres, ϵᵣ, tanδ, fres)
+function findf1(
+    cwgI::CWG,
+    cwgD::CWG,
+    cwgII::CWG,
+    fres;
+    kappasID = compute_kappa_matrix(cwgI, cwgD),
+    kappasDII = compute_kappa_matrix(cwgD, cwgII),
+    rhoend=1e-12)
+
+    Sres = sim_cavity_smat!(cwgI, cwgD, cwgII, kappasID, kappasDII, fres)
     tgoal = inv(sqrt(2)) * abs(Sres[1,2])
     x, info = newuoa([0.0]; rhoend) do x
         fghz = (1 - 1e-6 * x[1]^2) * fres
-        Rs = σ2Rs(σ, fghz)
-        S = sim_cavity_smat(geom, Rs, ϵᵣ, tanδ, fghz)
+        S = sim_cavity_smat!(cwgI, cwgD, cwgII, kappasID, kappasDII, fghz)
         s12abs = abs(S[1,2])
         return (s12abs - tgoal)^2
     end
@@ -283,34 +310,38 @@ function findf1(geom, σ, ϵᵣ, tanδ, fres; rhoend=1e-12)
 end
 
 """
-    findf2(geom, σ, ϵᵣ, tanδ, fres; rhoend=1e-12) -> f2, info
+    findf2(cwgI, cwgD, cwgII, fres; kappasID, kappasDII, rhoend=1e-12) -> f2, info
 
 Find the cavity upper half-power frequency where |S₁₂|² is 1/2 of its maximum (resonance) value.
 
 ## Positional Arguments
-- `geom`: A named tuple with the following fields:
-  * `d`: The cavity length (between lossy shorting plates) in inches.
-  * `a`: The cavity radius in inches.
-  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
-- `σ`: The bulk conductivity of the cavity wall in MKS units [S/m].
-- `ϵᵣ, tanδ`: The dielectric constant and loss tangent of the inserted dielectric sample.
+- `cwgI`, `cwgD`, `cwgII`: `CWG` instances describing the Region I, Dielectric Sample, and Region II waveguides. The `modes`
+  field of each should be initialized.
 - `fres`: The resonant frequency in GHz, where |S₁₂| takes its maximum value.
 
 ## Optional Keyword Arguments
+- `kappasID`, `kappasDII`: Frequency-independent coupling matrices for the Region I/Dielectric Sample
+  and Dielectric Sample/Region II interfaces, respectively.  If not passed they will be computed, costing execution time.
 - `rhoend`: Used as the `rhoend` argument to the `PRIMA.newuoa` function. 
 
 ## Return Values
 - `f2`: An estimate for the upper 1/2 power frequency in GHz.
 - `info`: The `info` struct returned by `PRIMA.newuoa`.
 """
-function findf2(geom2, σ, ϵᵣ, tanδ, fres; rhoend=1e-12)
-    Rsres = σ2Rs(σ, fres)
-    Sres = sim_cavity_smat(geom2, Rsres, ϵᵣ, tanδ, fres)
+function findf2(
+    cwgI::CWG,
+    cwgD::CWG,
+    cwgII::CWG,
+    fres;
+    kappasID = compute_kappa_matrix(cwgI, cwgD),
+    kappasDII = compute_kappa_matrix(cwgD, cwgII),
+    rhoend=1e-12)
+
+    Sres = sim_cavity_smat!(cwgI, cwgD, cwgII, kappasID, kappasDII, fres)
     tgoal = inv(sqrt(2)) * abs(Sres[1,2])
     x, info = newuoa([0.0]; rhoend) do x
         fghz = (1 + 1e-6 * x[1]^2) * fres
-        Rs = σ2Rs(σ, fghz)
-        S = sim_cavity_smat(geom2, Rs, ϵᵣ, tanδ, fghz)
+        S = sim_cavity_smat!(cwgI, cwgD, cwgII, kappasID, kappasDII, fghz)
         s12abs = abs(S[1,2])
         return (s12abs - tgoal)^2
     end
@@ -320,63 +351,71 @@ end
 
 
 """
-    findfresQ(geom, σ, ϵᵣ, tanδ, fstart) -> (; fres, Q)
+    findfresQ(cwgI, cwgD, cwgII, fstart; kappasID, kappasDII) -> (; fres, Q)
 
 Find the resonant frequency and Q of the given model.
 
-## Input Arguments
-- `geom`: A named tuple with the following fields:
-  * `d`: The cavity length (between lossy shorting plates) in inches.
-  * `a`: The cavity radius in inches.
-  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
-- `σ`: The cavity wall conductivity in Siemen/meter.
-- `ϵᵣ, tanδ`: The dielectric constant and loss tangent of the inserted dielectric sample.
+## Positional Input Arguments
+- `cwgI`, `cwgD`, `cwgII`: `CWG` instances describing the Region I, Dielectric Sample, and Region II waveguides. The `modes`
+  field of each should be initialized.
 - `fstart`: The initial guess at resonant frequency in GHz.
+## Optional Keyword Arguments
+- `kappasID`, `kappasDII`: Frequency-independent coupling matrices for the Region I/Dielectric Sample
+  and Dielectric Sample/Region II interfaces, respectively.  If not passed they will be computed, costing execution time.
 """
-function findfresQ(geom, σ, ϵᵣ, tanδ, fstart)
-    fres, infores = findfres(geom, σ, ϵᵣ, tanδ, fstart)
-    f1, info1 = findf1(geom, σ, ϵᵣ, tanδ, fres)
-    f2, info2 = findf2(geom, σ, ϵᵣ, tanδ, fres)
+function findfresQ(
+    cwgI,
+    cwgD,
+    cwgII,
+    fstart;
+    kappasID = compute_kappa_matrix(cwgI, cwgD),
+    kappasDII = compute_kappa_matrix(cwgD, cwgII)
+    )
+    
+    fres, infores = findfres(cwgI, cwgD, cwgII, fstart; kappasID, kappasDII)
+    f1, info1 = findf1(cwgI, cwgD, cwgII, fres; kappasID, kappasDII)
+    f2, info2 = findf2(cwgI, cwgD, cwgII, fres; kappasID, kappasDII)
     Q = fres / (f2 - f1)
     return (; fres, Q)
 end
 
 """
-findσd(geom, fresgoal, Qgoal, σstart) -> (; σ, d, info)
+findσd(cwgI, cwgD, cwgII, fresgoal, Qgoal) -> (; cwgI, cwgD, cwgII, info)
 
-Adjust conductivity and cylinder length (slightly) to yield the desired resonant frequency and Q of empty cavity.
+Adjust conductivity of all circular waveguides and cwgII cylinder length (slightly) to yield the desired resonant frequency and Q of empty cavity.
 
 The idea is to slightly adjust the wall conductivity and cavity length so that the S-parameter model produces
 exactly the same resonant frequency and Q as measured.  These updated values can then be used when seeking the
 dielectric constant and loss tangent corresponding to measured resonant frequency and Q with the sample inserted.
 
 ## Input Arguments
-- `geom`: A named tuple with the following fields:
-  * `d`: The cavity length (between lossy shorting plates) in inches.
-  * `a`: The cavity radius in inches.
-  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
-    For this function these are immaterial, since the analysis will assume vacuum electrical parameters in the sample region.
+- `cwgI`, `cwgD`, `cwgII`: `CWG` instances describing the Region I, Dielectric Sample, and Region II waveguides. Each of these
+  should specify the same conductivity (`σ` field) value. Also the `modes` field of each should be initialized.
+  `cwgD` should be initialized for a dielectric constant of unity and zero loss tangent.
 - `fresgoal`: The desired empty cavity resonant frequency in GHz.
 - `Qgoal`: The desired empty cavity quality factor.
-- `σstart`: An initial guess for the cavity wall conductivity in Siemen/meter.
 
-## Return Value
+## Return Values
 A named tuple with the following fields:
-- `σ`: The optimized conductivity [S/m].
+- `cwgI`, `cwgD`, `cwgII`: Same as the input values except that the conductivity (σ) values will be updated with the new
+  value and the length (`l` field) of `cwgII` will be adjusted as well.
 - `d`: The optimized cavity length [inch].
 - `info`: The `info` struct returned by `PRIMA.newuo`
 """
-function findσd(geom, fresgoal, Qgoal, σstart)
+function findσd(cwgI, cwgD, cwgII, fresgoal, Qgoal)
+    kappasID = compute_kappa_matrix(cwgI, cwgD),
+    kappasDII = compute_kappa_matrix(cwgD, cwgII)
     rhobeg = 0.1
     rhoend = 1e-12
-    dstart = geom.d
+    dstart = cwgII.l
+    σstart = cwgI.σ
     x, info = newuoa([1.0, 1.0]; rhobeg, rhoend) do x
-        ϵᵣ = 1.0
-        tanδ = 0.0
         σ = x[1]^2 * σstart
         d = x[2]^2 * dstart
-        geomtest = merge(geom, (; d))
-        (; fres, Q) = findfresQ(geomtest, σ, ϵᵣ, tanδ, fresgoal)
+        cwgItest = CWG(; a=cwgI.a, l=cwgI.l, σ=cwgI.σ, modes=CWGI.modes)
+        cwgDtest = CWG(; a=cwgD.a, l=cwgD.l, σ=cwgD.σ, modes=CWGD.modes)
+        cwgIItest = CWG(; a=cwgII.a, l=cwgII.l, σ=cwgII.σ, modes=CWGII.modes)
+        (; fres, Q) = findfresQ(cwgItest, cwgDtest, cwgIItest, fresgoal; kappasID, kappasDII)
         objective = sqrt(1e6 * (fres - fresgoal)^2 + 1e-6 * (Q - Qgoal)^2)
         return objective
     end
@@ -386,65 +425,20 @@ function findσd(geom, fresgoal, Qgoal, σstart)
 
 end
 
+
+
 """
-findσa(geom, fresgoal, Qgoal, σstart) -> (; σ, a, info)
+    findet(cwgI, cwgD, cwgII, fresgoal, Qgoal; n1=150) -> (; ϵᵣ, tanδ, info)
 
-Adjust conductivity and cylinder radius (slightly) to yield the desired resonant frequency and Q of empty cavity.
+Determine sample dielectric constant and loss tangent to yield the desired resonant frequency and Q cavity with sample.
 
-The idea is to slightly adjust the wall conductivity and cavity radius so that the S-parameter model produces
-exactly the same resonant frequency and Q as measured.  These updated values can then be used when seeking the
-dielectric constant and loss tangent corresponding to measured resonant frequency and Q with the sample inserted.
-
-## Input Arguments
-- `geom`: A named tuple with the following fields:
-  * `d`: The cavity length (between lossy shorting plates) in inches.
-  * `a`: The cavity radius in inches.
-  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
-    For this function these are immaterial, since the analysis will assume vacuum electrical parameters in the sample region.
+## Positional Input Arguments
+- `cwgI`, `cwgD`, `cwgII`: `CWG` instances describing the Region I, Dielectric Sample, and Region II waveguides. Each of these
+  should specify the same conductivity (`σ` field) value. The `modes` field of these should be initialized to an empty array.
 - `fresgoal`: The desired empty cavity resonant frequency in GHz.
 - `Qgoal`: The desired empty cavity quality factor.
-- `σstart`: An initial guess for the cavity wall conductivity in Siemen/meter.
-
-## Return Value
-A named tuple with the following fields:
-- `σ`: The optimized conductivity [S/m].
-- `a`: The optimized cavity radius [inch].
-- `info`: The `info` struct returned by `PRIMA.newuo`
-"""
-function findσa(geom, fresgoal, Qgoal, σstart)
-    rhobeg = 0.1
-    rhoend = 1e-12
-    astart = geom.a
-    x, info = newuoa([1.0, 1.0]; rhobeg, rhoend) do x
-        ϵᵣ = 1.0
-        tanδ = 0.0
-        σ = x[1]^2 * σstart
-        a = x[2]^2 * astart
-        geomtest = merge(geom, (; a))
-        (; fres, Q) = findfresQ(geomtest, σ, ϵᵣ, tanδ, fresgoal)
-        objective = sqrt(1e6 * (fres - fresgoal)^2 + 1e-6 * (Q - Qgoal)^2)
-        return objective
-    end
-    σ = x[1]^2 * σstart
-    a = x[2]^2 * astart
-    return (; σ, a, info)
-
-end
-
-
-"""
-    findet(geom, σ, fresgoal, Qgoal) -> (; ϵᵣ, tanδ, info)
-
-Determine sample dielectric constan and loss tangent to yield the desired resonant frequency and Q cavity with sample.
-
-## Input Arguments
-- `geom`: A named tuple with the following fields:
-  * `d`: The cavity length (between lossy shorting plates) in inches.
-  * `a`: The cavity radius in inches.
-  * `z1`, `z2`: The locations of the inserted dielectric sample boundaries, where `0 ≤ z1 < z2 ≤ d`.
-- `σ`: The wall conductivity in S/m.
-- `fresgoal`: The desired empty cavity resonant frequency in GHz.
-- `Qgoal`: The desired empty cavity quality factor.
+## Optional Keyword Arguments
+- `n1`: The number of modes used in `cwgI` for the multi-mode GSM analysis.  Defaults to 150.
 
 ## Return Value
 A named tuple with the following fields:
@@ -452,13 +446,27 @@ A named tuple with the following fields:
 - `tanδ`: An estimate of the loss tangent of the sample.
 - `info`: The `info` struct returned by `PRIMA.newuo`
 """
-function findet(geom, σ, fresgoal, Qgoal)
+function findet(cwgI::CWG, cwgD::CWG, cwgII::CWG, fresgoal, Qgoal; n1=150)
     rhobeg = 1.0
     rhoend = 1e-13
+
+    setup_modes!(cwgI, fresgoal, n1)
+    nD = ceil(Int, n1 * cwgD.a / cwgI.a)
+    isodd(nD) && (nD += 1)
+    setup_modes!(cwgD, fresgoal, nD)
+    n2 = ceil(Int, n1 * cwgII.a / cwgI.a)
+    isodd(n2) && (n2 += 1)
+    setup_modes!(cwgII, fresgoal, n2)
+    
+    kappasID = compute_kappa_matrix(cwgI, cwgD)
+    kappasDII = compute_kappa_matrix(cwgI, cwgII)
+
     x, info = newuoa([0.0, 0.0]; rhobeg, rhoend) do x
         ϵᵣ = 1.0 + x[1]^2
         tanδ = x[2]^2
-        (; fres, Q) = findfresQ(geom, σ, ϵᵣ, tanδ, fresgoal)
+        cwgDtest = CWG(; a=cwgD.a, l=cwgD.l, ϵᵣ, tanδ, σ=cwgD.σ, modes=cwgD.modes)
+
+        (; fres, Q) = findfresQ(cwgI, cwgDtest, cwgII, fresgoal; kappasID, kappasDII)
         objective = sqrt(1e6 * (fres - fresgoal)^2 + 1e-6 * (Q - Qgoal)^2)
         return objective
     end

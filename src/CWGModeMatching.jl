@@ -5,7 +5,7 @@ Mode matching module for circular waveguides with m = 1 azimuthal variation.
 """
 module CWGModeMatching
 
-export CWG, setup_modes!, cascade
+export CWG, setup_modes!, cascade, junction, junction!, propagate!, compute_kappa_matrix
 
 
 include("J1Jp_roots.jl")
@@ -216,9 +216,9 @@ function setup_modes!(c::CWG, fghz::Float64, nmodes::Int=length(c.modes))
         kco = mode.kcoa / c.a
         γ = mysqrt(kco^2 - k²)
         ratio = (kco / real(k))^2
-        if !iszero(Rs)
+        if !iszero(Rs) && (ratio < 1)
             α = Rs / (c.a * real(η)) / mysqrt(1 - ratio)  # attenuation due to metal loss
-            p == TE && (α *= (ratio + (kcoa/n)^-2))
+            p == TE && (α *= (ratio + (mode.kcoa/n)^-2))
             γ += α
         end
         β = -im * γ
@@ -232,15 +232,29 @@ function setup_modes!(c::CWG, fghz::Float64, nmodes::Int=length(c.modes))
     return c
 end
 
+"""
+    compute_kappa_matrix(c1::CWG, c2::CWG) -> kappas::Matrix{Float64}
 
-function compute_kappa_matrix!(c1::CWG, c2::CWG)
-    modes1 = c1.modes
-    modes2 = c2.modes
-    N1, N2 = length.((modes1, modes2))
-    t = c2.a / c1.a  # Radius ratio
-    if t < 1
-        error("c1 radius greater than c2 radius")
+Compute the matrix of coupling coefficients defined in Eqs. (16) through (22) of the notes.
+
+## Arguments
+- `c1`, `c2`: `CWG` instances describing the two waveguides forming the junction.  The `modes` field
+  of `c1` and `c2` must be properly initialized.
+
+## Return value
+- `kappas:Matrix{Float64}`: Contains the coupling coefficients. `size(kappas) == (length(c2.modes), length(c1.modes))`.
+"""
+function compute_kappa_matrix(c1::CWG, c2::CWG)
+    if c1.a ≤ c2.a
+        t = c2.a / c1.a # Radius ratio ≥ 1
+        xpose = false
+        modes1, modes2 = c1.modes, c2.modes
+    else
+        t = c1.a / c2.a  # Radius ratio ≥ 1
+        xpose = true
+        modes1, modes2 = c2.modes, c1.modes
     end
+    N1, N2 = length.((modes1, modes2))
 
     kappas = zeros(Float64, N2, N1)  # Preallocation
 
@@ -278,7 +292,11 @@ function compute_kappa_matrix!(c1::CWG, c2::CWG)
         end
     end
 
-    return kappas
+    if xpose
+        return transpose(kappas)
+    else
+        return kappas
+    end
 
 end
 
@@ -296,10 +314,22 @@ function Iint1(a::Float64, b::Float64, J1a::Float64, J0a::Float64)
     return integral
 end
 
+"""
+    junction!(gsm::GSM, c1::CWG, c2::CWG, kappas::Matrix{Float64}) -> gsm
 
+Compute the scattering matrix of the junction of two circular waveguides for the m=1 modes.  
+Does not include the effects of the waveguide lengths.
+
+## Arguments
+- `gsm::GSM`:  A pre-allocated `GSM` instance whose entries will be modified.  Must be conformable with the number of 
+  modes defined in `c1` and `c2`. I.e., if `n1 = length(c1.modes)` and `n2 = length(c2.modes)`, then 
+  `size(gsm.s11) == (n1,n1)`, `size(gsm.s12) == (n1,n2)`, `size(gsm.s21) == (n2,n1)`, `size(gsm.s22) == (n2,n2)`.
+- `c1::CWG` and `c2::CWG`: The two waveguides whose junction scattering matrix is sought.  The `modes` field of each
+  must be properly initialized.  The modified `gsm` is also provided as the return value of this function.
+- `kappas`: The matrix of frequency-independent coupling coefficients defined in Eq. (16) of the notes. Must satisfy
+  `size(kappas) == (n2, n1)`.
+  """
 function junction!(gsm::GSM, c1::CWG, c2::CWG, kappas::Matrix{Float64})
-    # Compute scattering matrix entries for the junction of `c1` and `c2`. Ref. Eq. 15, 
-
     # Obtain number of modes on both sides of junction:
     Nm1 = length(c1.modes)
     Nm2 = length(c2.modes)
@@ -339,11 +369,53 @@ function junction!(gsm::GSM, c1::CWG, c2::CWG, kappas::Matrix{Float64})
     return gsm
 end
 
+"""
+    junction(c1::CWG, c2::CWG, kappas::Matrix{Float64}) -> gsm::GSM
+
+Compute the generalized scattering matrix of the junction of two circular waveguides for the m=1 modes.
+
+## Arguments
+- `c1::CWG` and `c2::CWG`: The two waveguides whose junction scattering matrix is sought.  The `modes` field of each
+  must be properly initialized.  
+- `kappas`: The matrix of frequency-independent coupling coefficients defined in Eq. (16) of the notes. Must satisfy
+  `size(kappas) == (n2, n1)`.
+
+## Return Value
+- `gsm::GSM`:  Contains the computed generalized scattering matrix for the junction (not including the waveguide lengths).
+  Will be conformable with the number of modes defined in `c1` and `c2`. I.e., if `n1 = length(c1.modes)` and 
+  `n2 = length(c2.modes)`, then `size(gsm.s11) == (n1,n1)`, `size(gsm.s12) == (n1,n2)`, `size(gsm.s21) == (n2,n1)`, 
+  and `size(gsm.s22) == (n2,n2)`.
+"""
 function junction(c1::CWG, c2::CWG, kappas::Matrix{Float64})
     n1 = length(c1.modes)
     n2 = length(c2.modes)
     gsm = GSM(n1, n2)
-    return junction!(gsm, c1::CWG, c2::CWG, kappas::Matrix{Float64})
+    return junction!(gsm, c1, c2, kappas)
+end
+
+"""
+    junction(c1::CWG, c2::CWG) -> (gsm::GSM, kappas::Matrix{Float64})
+
+Compute the generalized scattering matrix  and coupling coefficient matrix of the junction of two circular waveguides (for the m=1 modes).
+
+## Arguments
+- `c1::CWG` and `c2::CWG`: The two waveguides whose junction scattering matrix is sought, with `c1.a ≤ c2.a`.  The `modes` field of each
+  must be properly initialized.  
+
+## Return Values: `(gsm, kappas)`
+- `gsm::GSM`:  Contains the computed generalized scattering matrix for the junction (not including the waveguide lengths).
+  Will be conformable with the number of modes defined in `c1` and `c2`. I.e., if `n1 = length(c1.modes)` and 
+  `n2 = length(c2.modes)`, then `size(gsm.s11) == (n1,n1)`, `size(gsm.s12) == (n1,n2)`, `size(gsm.s21) == (n2,n1)`, 
+  and `size(gsm.s22) == (n2,n2)`.
+- `kappas`: The matrix of frequency-independent coupling coefficients defined in Eq. (16) of the notes. Will satisfy
+  `size(kappas) == (n2, n1)`.
+"""
+function junction(c1::CWG, c2::CWG)
+    n1 = length(c1.modes)
+    n2 = length(c2.modes)
+    gsm = GSM(n1, n2)
+    kappas = compute_kappa_matrix(c1, c2)
+    return (junction!(gsm, c1, c2, kappas), kappas)
 end
 
 
@@ -385,7 +457,7 @@ Compute the GSM for the junction of two waveguide sections, including their leng
   it will be computed and returned to the caller in the return value of the function.
 """
 function cascade(c1::CWG, c2::CWG, kappas::Matrix=zeros(0,0))
-    isempty(kappas) && (kappas = compute_kappa_matrix!(c1::CWG, c2::CWG))
+    isempty(kappas) && (kappas = compute_kappa_matrix(c1::CWG, c2::CWG))
     n1 = length(c1.modes)
     n2 = length(c2.modes)
     size(kappas) == (n2,n1) || error("Size error")
