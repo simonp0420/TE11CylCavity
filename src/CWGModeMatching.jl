@@ -217,7 +217,7 @@ function setup_modes!(c::CWG, fghz::Float64, nmodes::Int=length(c.modes))
         γ = mysqrt(kco^2 - k²)
         ratio = (kco / real(k))^2
         if !iszero(Rs) && (ratio < 1)
-            α = Rs / (c.a * real(η)) / mysqrt(1 - ratio)  # attenuation due to metal loss
+            α = Rs / (c.a * real(η)) / sqrt(1 - ratio)  # attenuation due to metal loss
             p == TE && (α *= (ratio + (mode.kcoa/n)^-2))
             γ += α
         end
