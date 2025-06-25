@@ -403,7 +403,7 @@ A named tuple with the following fields:
 - `info`: The `info` struct returned by `PRIMA.newuo`
 """
 function findσd(cwgI, cwgD, cwgII, fresgoal, Qgoal)
-    kappasID = compute_kappa_matrix(cwgI, cwgD),
+    kappasID = compute_kappa_matrix(cwgI, cwgD)
     kappasDII = compute_kappa_matrix(cwgD, cwgII)
     rhobeg = 0.1
     rhoend = 1e-12
@@ -411,18 +411,21 @@ function findσd(cwgI, cwgD, cwgII, fresgoal, Qgoal)
     σstart = cwgI.σ
     x, info = newuoa([1.0, 1.0]; rhobeg, rhoend) do x
         σ = x[1]^2 * σstart
-        d = x[2]^2 * dstart
-        cwgItest = CWG(; a=cwgI.a, l=cwgI.l, σ=cwgI.σ, modes=CWGI.modes)
-        cwgDtest = CWG(; a=cwgD.a, l=cwgD.l, σ=cwgD.σ, modes=CWGD.modes)
-        cwgIItest = CWG(; a=cwgII.a, l=cwgII.l, σ=cwgII.σ, modes=CWGII.modes)
+        lII = x[2]^2 * dstart
+        cwgItest = CWG(; a=cwgI.a, l=cwgI.l, σ=cwgI.σ, modes=cwgI.modes)
+        cwgDtest = CWG(; a=cwgD.a, l=cwgD.l, σ=cwgD.σ, modes=cwgD.modes)
+        cwgIItest = CWG(; a=cwgII.a, l=lII, σ=cwgII.σ, modes=cwgII.modes)
         (; fres, Q) = findfresQ(cwgItest, cwgDtest, cwgIItest, fresgoal; kappasID, kappasDII)
         objective = sqrt(1e6 * (fres - fresgoal)^2 + 1e-6 * (Q - Qgoal)^2)
         return objective
     end
     σ = x[1]^2 * σstart
-    d = x[2]^2 * dstart
-    return (; σ, d, info)
+    lII = x[2]^2 * dstart
+    cwgI = CWG(; a=cwgI.a, l=cwgI.l, σ, modes=cwgI.modes)
+    cwgD = CWG(; a=cwgD.a, ϵᵣ=cwgD.ϵᵣ, tanδ=cwgD.tanδ, l=cwgD.l, σ, modes=cwgD.modes)
+    cwgII = CWG(; a=cwgII.a, l=lII, σ, modes=cwgII.modes)
 
+    return (; cwgI, cwgD, cwgII, info)
 end
 
 
@@ -448,14 +451,17 @@ A named tuple with the following fields:
 """
 function findet(cwgI::CWG, cwgD::CWG, cwgII::CWG, fresgoal, Qgoal; n1=150)
     rhobeg = 1.0
-    rhoend = 1e-13
+    rhoend = 1e-14
 
+    n1 = iszero(length(cwgI.modes)) ? n1 : length(cwgI.modes)
     setup_modes!(cwgI, fresgoal, n1)
     nD = ceil(Int, n1 * cwgD.a / cwgI.a)
     isodd(nD) && (nD += 1)
+    nD = iszero(length(cwgD.modes)) ? nD : length(cwgD.modes)
     setup_modes!(cwgD, fresgoal, nD)
     n2 = ceil(Int, n1 * cwgII.a / cwgI.a)
     isodd(n2) && (n2 += 1)
+    n2 = iszero(length(cwgII.modes)) ? n2 : length(cwgII.modes)
     setup_modes!(cwgII, fresgoal, n2)
     
     kappasID = compute_kappa_matrix(cwgI, cwgD)
@@ -463,7 +469,7 @@ function findet(cwgI::CWG, cwgD::CWG, cwgII::CWG, fresgoal, Qgoal; n1=150)
 
     x, info = newuoa([0.0, 0.0]; rhobeg, rhoend) do x
         ϵᵣ = 1.0 + x[1]^2
-        tanδ = x[2]^2
+        tanδ = 0.1 * x[2]^2
         cwgDtest = CWG(; a=cwgD.a, l=cwgD.l, ϵᵣ, tanδ, σ=cwgD.σ, modes=cwgD.modes)
 
         (; fres, Q) = findfresQ(cwgI, cwgDtest, cwgII, fresgoal; kappasID, kappasDII)
@@ -471,7 +477,7 @@ function findet(cwgI::CWG, cwgD::CWG, cwgII::CWG, fresgoal, Qgoal; n1=150)
         return objective
     end
     ϵᵣ = 1.0 + x[1]^2
-    tanδ = x[2]^2
+    tanδ = 0.1 * x[2]^2
     return (; ϵᵣ, tanδ, info)
 end
 
