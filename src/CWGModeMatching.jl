@@ -218,7 +218,7 @@ function setup_modes!(c::CWG, fghz::Float64, nmodes::Int=length(c.modes))
         ratio = (kco / real(k))^2
         if !iszero(Rs) && (ratio < 1)
             α = Rs / (c.a * real(η)) / sqrt(1 - ratio)  # attenuation due to metal loss
-            p == TE && (α *= (ratio + (mode.kcoa/n)^-2))
+            p == TE && (α *= (ratio + inv((mode.kcoa/n)^2 - 1)))
             γ += α
         end
         β = -im * γ
