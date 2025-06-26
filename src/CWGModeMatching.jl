@@ -7,6 +7,7 @@ module CWGModeMatching
 
 export CWG, setup_modes!, cascade, junction, junction!, propagate!, compute_kappa_matrix
 
+using LinearAlgebra: diagind
 
 include("J1Jp_roots.jl")
 
@@ -178,7 +179,7 @@ Set up the modes for a uniform circular waveguide.
   already allocated, then its values will be replaced with updated values of `γ` and `Z` corresponding to the 
   new frequency `fghz`.
 - `fghz`: The frequency [GHz]
-- `nmodes`: (optional) The (even) number of modes to append to `c.modes` if it is empty.  If `c.modes` is nonempty, then
+- `nmodes`: (optional) The number of modes to append to `c.modes` if it is empty.  If `c.modes` is nonempty, then
   `nmodes` must be equal to `length(c.modes)`.
 """
 function setup_modes!(c::CWG, fghz::Float64, nmodes::Int=length(c.modes))
@@ -188,9 +189,9 @@ function setup_modes!(c::CWG, fghz::Float64, nmodes::Int=length(c.modes))
     else
         nmodes == length(c.modes) || throw(ArgumentError("nmodes not equal to number of existing modes in c"))
     end
-    iseven(nmodes) || throw(ArgumentError("nmodes must be even"))
 
-    nmodeso2 = nmodes ÷ 2 # Number of TE modes (= number of TM modes)
+    nmodeste = ceil(Int, nmodes / 2) # Number of TE modes
+    nmodestm = nmodes ÷ 2
     λ₀ = c₀ / fghz
     k₀ = 2π / λ₀
     rootϵ = mysqrt(c.ϵᵣ * complex(1.0, -c.tanδ)) 
@@ -201,23 +202,24 @@ function setup_modes!(c::CWG, fghz::Float64, nmodes::Int=length(c.modes))
 
     if isempty(c.modes)
         # Initialize modes
-        for n in 1:nmodeso2,  (p, kcoa) in ((TE, chip[n]), (TM, chi[n]))
+        for n in 1:nmodeste,  (p, kcoa) in ((TE, chip[n]), (TM, chi[n]))
             mode = Mode(; n, p, kcoa)
             push!(c.modes, mode)
+            n > nmodestm && break
         end
     end
 
     # Update γ and Z
     q = 0 # Initialize mode counter
-    for n in 1:nmodeso2, p in (TE, TM)
+    for n in 1:nmodeste, p in (TE, TM)
         q += 1
         mode = c.modes[q]
         mode.p == p || error("p mismatch for mode $q!")
         kco = mode.kcoa / c.a
         γ = mysqrt(kco^2 - k²)
-        ratio = (kco / real(k))^2
+        ratio = (kco / k)^2 |> real
         if !iszero(Rs) && (ratio < 1)
-            α = Rs / (c.a * real(η)) / sqrt(1 - ratio)  # attenuation due to metal loss
+            α = real(Rs / η) / (c.a * sqrt(1 - ratio))  # attenuation due to metal loss
             p == TE && (α *= (ratio + inv((mode.kcoa/n)^2 - 1)))
             γ += α
         end
@@ -228,6 +230,7 @@ function setup_modes!(c::CWG, fghz::Float64, nmodes::Int=length(c.modes))
            Z = β / k * η
         end
         c.modes[q] = Mode(; n = mode.n, p, kcoa = mode.kcoa, γ, Z)
+        q == nmodes && break
     end
     return c
 end
@@ -245,7 +248,11 @@ Compute the matrix of coupling coefficients defined in Eqs. (16) through (22) of
 - `kappas:Matrix{Float64}`: Contains the coupling coefficients. `size(kappas) == (length(c2.modes), length(c1.modes))`.
 """
 function compute_kappa_matrix(c1::CWG, c2::CWG)
-    if c1.a ≤ c2.a
+    if isapprox(c1.a, c2.a, atol = 1e-6)
+        kappas = zeros(length(c2.modes), length(c1.modes))
+        kappas[diagind(kappas)] .= 1.0
+        return kappas
+    elseif c1.a ≤ c2.a
         t = c2.a / c1.a # Radius ratio ≥ 1
         xpose = false
         modes1, modes2 = c1.modes, c2.modes
