@@ -1,6 +1,6 @@
 # Case2a: Here we adjust the cavity length and conductivity to agree with CST empty cavity result
 
-using TE11CylCavity: CWG, setup_rect2cyl, setup_cyl2rect, setup_modes!, findfresQ, findσd, findet
+using TE11CylCavity: TE11CylCavity, CWG, setup_rect2cyl, setup_cyl2rect, setup_modes!, findfresQ, findσd, findet
  
 a = 0.35 # Common radius of all 3 sections of CWG
 d = 3.5 # Total length
@@ -12,7 +12,7 @@ cwgI = CWG(; a, l=lI, σ=σstart)
 cwgD = CWG(; a, l=lD, σ=σstart)
 cwgII = CWG(; a, l=lII, σ=σstart)
 
-n1 = 20
+n1 = 1
 n2 = ceil(Int, n1 * (cwgD.a / cwgI.a))
 
 fQ0 = (; fres = 15.3791, Q = 1813.12) # CST for empty cavity
@@ -22,8 +22,8 @@ foreach((c, n) -> setup_modes!(c, fQ0.fres, n), (cwgI, cwgD, cwgII), (n1, n2, n2
 
 
 
-setup_rect2cyl(joinpath(@__DIR__, "case2a_rwgcwg_transition.s2p"))
-setup_cyl2rect(joinpath(@__DIR__, "case2a_cwgrwg_transition.s2p"))
+setup_rect2cyl(pkgdir(TE11CylCavity, "s2pfiles", "case2a_rwgcwg_transition.s2p"))
+setup_cyl2rect(pkgdir(TE11CylCavity, "s2pfiles", "case2a_cwgrwg_transition.s2p"))
 println("Case 2a")
 
 fghzstart = fQ0.fres
