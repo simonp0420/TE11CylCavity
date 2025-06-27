@@ -13,7 +13,7 @@ cwgD = CWG(; a, l=lD, σ=σstart)
 cwgII = CWG(; a, l=lII, σ=σstart)
 
 n1 = 20
-n2 = ceil(Int, n1 * cwgD.a / cwgI.a); isodd(n2) && (n2 += 1)
+n2 = ceil(Int, n1 * (cwgD.a / cwgI.a))
 
 fQ0 = (; fres = 15.3791, Q = 1813.12) # CST for empty cavity
 fQ = (; fres = 15.3355, Q = 1650.81) # CST for case2a dielectric sample
