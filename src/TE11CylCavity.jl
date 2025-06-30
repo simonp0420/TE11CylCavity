@@ -3,7 +3,7 @@ module TE11CylCavity
 export CWG, setup_modes!, cascade, junction, junction!, propagate!, setup_rect2cyl, setup_cyl2rect, scyl2rect, srect2cyl
 
 using StaticArrays: @SMatrix
-using PRIMA: newuoa
+using PRIMA: newuoa, bobyqa
 using Dierckx: Dierckx # Spline1D and derivative
 using Roots: Roots  # find_zero
 
@@ -259,7 +259,7 @@ function findfres(
     
     Sstart = sim_cavity_smat!(cwgI, cwgD, cwgII, kappasID, kappasDII, fstart)
     tstart = abs(Sstart[1,2])
-    x, info = newuoa([0.0]; rhoend) do x
+    x, info = bobyqa([0.0]; rhoend) do x
         fghz = 1e-3 * x[1] * fstart + fstart # Unscale the objective variable
         S = sim_cavity_smat!(cwgI, cwgD, cwgII, kappasID, kappasDII, fghz)
         s12abs = abs(S[1,2])
@@ -400,32 +400,47 @@ A named tuple with the following fields:
 - `cwgI`, `cwgD`, `cwgII`: Same as the input values except that the conductivity (σ) values will be updated with the new
   value and the length (`l` field) of `cwgII` will be adjusted as well.
 - `d`: The optimized cavity length [inch].
-- `info`: The `info` struct returned by `PRIMA.newuo`
+- `infolII`: The `info` struct returned by `PRIMA.newuo` when optimizing `cwgII.l`
+- `infoσ`: The `info` struct returned by `PRIMA.newuo` when optimizing σ for all 3 guides.
 """
 function findσd(cwgI, cwgD, cwgII, fresgoal, Qgoal)
     kappasID = compute_kappa_matrix(cwgI, cwgD)
     kappasDII = compute_kappa_matrix(cwgD, cwgII)
-    rhobeg = 0.1
-    rhoend = 1e-12
     σstart = cwgI.σ
     lIIstart = cwgII.l
-    x, info = newuoa([1.0, 1.0]; rhobeg, rhoend) do x
-        σ = x[1]^2 * σstart
-        lII = x[2]^2 * lIIstart
+
+    # For d
+    rhobeg = 0.1
+    rhoend = 1e-8
+    x, infolII = bobyqa([1.0]; rhobeg, rhoend, xl=[0.8], xu=[1.2]) do x
+        lII = x[1] * lIIstart
+        cwgIItest = CWG(; a=cwgII.a, l=lII, σ = cwgII.σ, modes=cwgII.modes)
+        fres, _ = findfres(cwgI, cwgD, cwgIItest, fresgoal; kappasID, kappasDII)
+        objective = (fres/fresgoal - 1)^2
+        return objective
+    end
+    lII = x[1] * lIIstart
+
+    # For σ
+    rhobeg = 0.1
+    rhoend = 1e-8
+    x, infoσ = bobyqa([1.0]; rhobeg, rhoend, xl=[0.8], xu=[1.2]) do x
+        σ = x[1] * σstart
         cwgItest = CWG(; a=cwgI.a, l=cwgI.l, σ, modes=cwgI.modes)
         cwgDtest = CWG(; a=cwgD.a, l=cwgD.l, σ, modes=cwgD.modes)
         cwgIItest = CWG(; a=cwgII.a, l=lII, σ, modes=cwgII.modes)
-        (; fres, Q) = findfresQ(cwgItest, cwgDtest, cwgIItest, fresgoal; kappasID, kappasDII)
-        objective = sqrt(1e6 * (fres - fresgoal)^2 + 1e-6 * (Q - Qgoal)^2)
+        f1, _ = findf1(cwgItest, cwgDtest, cwgIItest, fresgoal; kappasID, kappasDII)
+        f2, _ = findf2(cwgItest, cwgDtest, cwgIItest, fresgoal; kappasID, kappasDII)
+        Q = fresgoal / (f2 - f1)
+        objective = (Q/Qgoal - 1)^2
         return objective
     end
-    σ = x[1]^2 * σstart
-    lII = x[2]^2 * lIIstart
+    σ = x[1] * σstart
     cwgI = CWG(; a=cwgI.a, l=cwgI.l, σ, modes=cwgI.modes)
     cwgD = CWG(; a=cwgD.a, ϵᵣ=cwgD.ϵᵣ, tanδ=cwgD.tanδ, l=cwgD.l, σ, modes=cwgD.modes)
     cwgII = CWG(; a=cwgII.a, l=lII, σ, modes=cwgII.modes)
 
-    return (; cwgI, cwgD, cwgII, info)
+    return (; cwgI, cwgD, cwgII, infolII, infoσ)
 end
 
 
@@ -447,38 +462,54 @@ Determine sample dielectric constant and loss tangent to yield the desired reson
 A named tuple with the following fields:
 - `ϵᵣ`: An estimate of the dielectric constant of the sample.
 - `tanδ`: An estimate of the loss tangent of the sample.
-- `info`: The `info` struct returned by `PRIMA.newuo`
+- `infoϵᵣ`: The `info` struct returned by `PRIMA.bobyqa` when optimizing `cwgD.ϵᵣ`.
+- `infotanδ`: The `info` struct returned by `PRIMA.bobyqa` when optimizing `cwgD.tanδ`.
 """
-function findet(cwgI::CWG, cwgD::CWG, cwgII::CWG, fresgoal, Qgoal; n1=150)
-    rhobeg = 1.0
-    rhoend = 1e-14
+function findet(cwgI::CWG, cwgD::CWG, cwgII::CWG, fresgoal, Qgoal; n1=20)
 
     n1 = iszero(length(cwgI.modes)) ? n1 : length(cwgI.modes)
     setup_modes!(cwgI, fresgoal, n1)
     nD = ceil(Int, n1 * cwgD.a / cwgI.a)
-    isodd(nD) && (nD += 1)
     nD = iszero(length(cwgD.modes)) ? nD : length(cwgD.modes)
     setup_modes!(cwgD, fresgoal, nD)
     n2 = ceil(Int, n1 * cwgII.a / cwgI.a)
-    isodd(n2) && (n2 += 1)
     n2 = iszero(length(cwgII.modes)) ? n2 : length(cwgII.modes)
     setup_modes!(cwgII, fresgoal, n2)
     
     kappasID = compute_kappa_matrix(cwgI, cwgD)
-    kappasDII = compute_kappa_matrix(cwgI, cwgII)
+    kappasDII = compute_kappa_matrix(cwgD, cwgII)
 
-    x, info = newuoa([0.0, 0.0]; rhobeg, rhoend) do x
-        ϵᵣ = 1.0 + x[1]^2
-        tanδ = 0.1 * x[2]^2
+    # Starting values:
+    ϵᵣ = 2.5
+    tanδ = 10^(-2.5)
+
+    # For dielectric constant
+    rhobeg = 1.0
+    rhoend = 1e-8
+    x, infoϵᵣ = bobyqa([ϵᵣ]; rhobeg, rhoend, xl=[1.0], xu=[15.0]) do x
+        ϵᵣ = x[1]
         cwgDtest = CWG(; a=cwgD.a, l=cwgD.l, ϵᵣ, tanδ, σ=cwgD.σ, modes=cwgD.modes)
-
-        (; fres, Q) = findfresQ(cwgI, cwgDtest, cwgII, fresgoal; kappasID, kappasDII)
-        objective = sqrt(1e6 * (fres - fresgoal)^2 + 1e-6 * (Q - Qgoal)^2)
+        fres, _ = findfres(cwgI, cwgDtest, cwgII, fresgoal; kappasID, kappasDII)
+        objective = (fres/fresgoal - 1)^2
         return objective
     end
-    ϵᵣ = 1.0 + x[1]^2
-    tanδ = 0.1 * x[2]^2
-    return (; ϵᵣ, tanδ, info)
+    ϵᵣ = x[1]
+    
+    # For loss tangent
+    rhobeg = 1.0
+    rhoend = 1e-8
+    x, infotanδ = bobyqa([-log10(tanδ)]; rhobeg, rhoend, xl=[0.5], xu=[5.0]) do x
+        tanδ = 10^(-x[1])
+        cwgDtest = CWG(; a=cwgD.a, l=cwgD.l, ϵᵣ, tanδ, σ=cwgD.σ, modes=cwgD.modes)
+        f1, info1 = findf1(cwgI, cwgDtest, cwgII, fresgoal; kappasID, kappasDII)
+        f2, info2 = findf2(cwgI, cwgDtest, cwgII, fresgoal; kappasID, kappasDII)
+        Q = fresgoal / (f2 - f1)
+        objective = (Q/Qgoal - 1)^2
+        return objective
+    end
+    tanδ = 10^(-x[1])
+
+    return (; ϵᵣ, tanδ, infoϵᵣ, infotanδ)
 end
 
 end # module
