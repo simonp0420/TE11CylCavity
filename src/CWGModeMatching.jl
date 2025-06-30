@@ -342,7 +342,6 @@ function junction!(gsm::GSM, c1::CWG, c2::CWG, kappas::Matrix{Float64})
     Nm2 = length(c2.modes)
 
     # Use Eq. (15) to find P matrix:
-    #P = Diagonal(rz2) * kappas * Diagonal(rz1)
     P = [complex(v) for v in kappas]
     for n in 1:Nm1
         rZ1 = sqrt(c1.modes[n].Z)
@@ -440,7 +439,7 @@ function propagate!(a::GSM, modes::AbstractVector{Mode}, l::Real)
     n2 = size(a[2,2], 1)
     n2 ≠ length(modes) && @error "# modes not consistent" n2 length(modes) size(a[1,2]) exception = ErrorException
     #  Loop over each of the modes:
-    for i in 1:n2
+    @views for i in 1:n2
         p = exp(-modes[i].γ * l)
         a[1,2][:, i] .*= p
         a[2,1][i, :] .*= p
