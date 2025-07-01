@@ -295,17 +295,23 @@ function findf1(
     fres;
     kappasID = compute_kappa_matrix(cwgI, cwgD),
     kappasDII = compute_kappa_matrix(cwgD, cwgII),
-    rhoend=1e-12)
+    rhoend=1e-10)
 
     Sres = sim_cavity_smat!(cwgI, cwgD, cwgII, kappasID, kappasDII, fres)
     tgoal = inv(sqrt(2)) * abs(Sres[1,2])
-    x, info = newuoa([0.0]; rhoend) do x
-        fghz = (1 - 1e-6 * x[1]^2) * fres
+
+    Qmax = 2e4
+    Qmin = 2e2
+    rhobeg = inv(2Qmax)
+    xl = [1 - inv(2Qmin)]
+    xu = [1 - inv(2Qmax)]
+    x, info = bobyqa([xu[1] - rhobeg]; xl, xu, rhobeg, rhoend) do x
+        fghz = x[1] * fres
         S = sim_cavity_smat!(cwgI, cwgD, cwgII, kappasID, kappasDII, fghz)
         s12abs = abs(S[1,2])
         return (s12abs - tgoal)^2
     end
-    fopt = (1 - 1e-6 * x[1]^2) * fres
+    fopt = x[1] * fres
     return fopt, info
 end
 
@@ -335,17 +341,23 @@ function findf2(
     fres;
     kappasID = compute_kappa_matrix(cwgI, cwgD),
     kappasDII = compute_kappa_matrix(cwgD, cwgII),
-    rhoend=1e-12)
+    rhoend=1e-10)
 
     Sres = sim_cavity_smat!(cwgI, cwgD, cwgII, kappasID, kappasDII, fres)
     tgoal = inv(sqrt(2)) * abs(Sres[1,2])
-    x, info = newuoa([0.0]; rhoend) do x
-        fghz = (1 + 1e-6 * x[1]^2) * fres
+
+    Qmax = 2e4
+    Qmin = 2e2
+    rhobeg = inv(2Qmax)
+    xl = [1 + inv(2Qmax)]
+    xu = [1 + inv(2Qmin)]
+    x, info = bobyqa([xl[1] + rhobeg]; xl, xu, rhobeg, rhoend) do x
+        fghz = x[1] * fres
         S = sim_cavity_smat!(cwgI, cwgD, cwgII, kappasID, kappasDII, fghz)
         s12abs = abs(S[1,2])
         return (s12abs - tgoal)^2
     end
-    fopt = (1 + 1e-6 * x[1]^2) * fres
+    fopt = x[1] * fres
     return fopt, info
 end
 
@@ -484,8 +496,8 @@ function findet(cwgI::CWG, cwgD::CWG, cwgII::CWG, fresgoal, Qgoal; n1=20)
     tanδ = 10^(-2.5)
 
     # For dielectric constant
-    rhobeg = 1.0
-    rhoend = 1e-8
+    rhobeg = 0.35
+    rhoend = 1e-6
     x, infoϵᵣ = bobyqa([ϵᵣ]; rhobeg, rhoend, xl=[1.0], xu=[15.0]) do x
         ϵᵣ = x[1]
         cwgDtest = CWG(; a=cwgD.a, l=cwgD.l, ϵᵣ, tanδ, σ=cwgD.σ, modes=cwgD.modes)
@@ -496,8 +508,8 @@ function findet(cwgI::CWG, cwgD::CWG, cwgII::CWG, fresgoal, Qgoal; n1=20)
     ϵᵣ = x[1]
     
     # For loss tangent
-    rhobeg = 1.0
-    rhoend = 1e-8
+    rhobeg = 0.2
+    rhoend = 1e-6
     x, infotanδ = bobyqa([-log10(tanδ)]; rhobeg, rhoend, xl=[0.5], xu=[5.0]) do x
         tanδ = 10^(-x[1])
         cwgDtest = CWG(; a=cwgD.a, l=cwgD.l, ϵᵣ, tanδ, σ=cwgD.σ, modes=cwgD.modes)
