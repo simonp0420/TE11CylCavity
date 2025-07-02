@@ -1,31 +1,33 @@
-# Case2a
-println("Case 2a")
-println("Actuals: ϵᵣ = 5.7, tanδ = 0.003\n")
+# Case4
+println("Case 4 (Kratos Cavity without Spacer)")
+println("Actuals: ϵᵣ = 5.5, tanδ = 0.0003 (Pyroceram)\n")
 
 # Define the geometry and provided measured or computed resonant frequency and Q for empty and with-sample cavity:
-a = 0.35 # Common radius of all 3 sections of CWG [inch]
-d = 3.5 # Total cavity length [inch]
-lI = 0.5; lD = 0.05; lII = d - (lI + lD) # CWG lengths adding up to d = 3.5 inch
-σstart = 644_000 # Inconel wall conductivity S/m
-fQ0 = (; fres = 15.3791, Q = 1813.12) # Provided values for empty cavity
-fQ = (; fres = 15.3355, Q = 1650.81) # Provided values for case2a with dielectric sample
-using MKL
+aI = 0.3 # Radius of cwg I (spacer) [inch]
+aD = 0.3 # Radius of cwg D (dielectric sample) [inch]
+aII = 0.3 # Radius of cwg II (final air region) [inch]
+d = 2.99 # Total cavity length [inch]
+lI = 0.2; lD = 0.05; lII = d - (lI + lD) # CWG lengths adding up to d = 3.5 inch
+σstart = 789_889.0 # Inconel wall conductivity S/m
+fQ0 = (; fres = 16.50816, Q = 1661.18) # Provided values for empty cavity [GHz, unitless]
+fQ = (; fres = 15.89933, Q = 1659.412) # Provided values for cavity with dielectric sample
+
 using TE11CylCavity: TE11CylCavity, CWG, setup_rect2cyl, setup_cyl2rect, setup_modes!, findfresQ, findσd, findet
  
 # Define the rectangular-to-circular and circular-to-rectangular waveguide transitions:
-setup_rect2cyl(pkgdir(TE11CylCavity, "s2pfiles", "case2a_rwgcwg_transition.s2p"))
-setup_cyl2rect(pkgdir(TE11CylCavity, "s2pfiles", "case2a_cwgrwg_transition.s2p"))
+setup_rect2cyl(pkgdir(TE11CylCavity, "s2pfiles", "Kratos_rwg2cwgII_transition.s2p"))
+setup_cyl2rect(pkgdir(TE11CylCavity, "s2pfiles", "Kratos_cwgII2rwg_transition.s2p"))
 
 dstart = d # Save for later use
 
-cwgI = CWG(; a, l=lI, σ=σstart)
-cwgD = CWG(; a, l=lD, σ=σstart)
-cwgII = CWG(; a, l=lII, σ=σstart)
+cwgI = CWG(; a=aI, l=lI, σ=σstart)
+cwgD = CWG(; a=aD, l=lD, σ=σstart)
+cwgII = CWG(; a=aII, l=lII, σ=σstart)
 
 if cwgI.a == cwgD.a == cwgII.a
     n1 = 1 # Only one mode required since no step in radius
 else
-    n1 = 100
+    n1 = 20
 end
 n2 = ceil(Int, n1 * (cwgD.a / cwgI.a))
 
@@ -38,7 +40,7 @@ case0 = findfresQ(cwgI, cwgD, cwgII, fresgoal)
 println("Initial run for empty cavity: ", case0)
 
 # Here we adjust the cavity length and conductivity to agree with the provided empty cavity result:
-cwgIadj, cwgDadj, cwgIIadj, _, _ =  findσd(cwgI, cwgD, cwgII, fresgoal, Qgoal)
+cwgIadj, cwgDadj, cwgIIadj, _ =  findσd(cwgI, cwgD, cwgII, fresgoal, Qgoal)
 σopt, dopt = cwgIadj.σ, sum(c -> c.l, (cwgIadj, cwgDadj, cwgIIadj))
 
 println("σ and d optimized to produce same resonant frequency and Q as provided for empty cavity:")
