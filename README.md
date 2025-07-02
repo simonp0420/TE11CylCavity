@@ -65,6 +65,9 @@ Once the scripts are properly edited, you can run them via a command at the Juli
 include("test_findcase6fresQ.jl")
 ```
 
+When you are ready to exit your Julia session, you can either type Ctrl-D or `exit()` at the Julia prompt, to take you
+back to the OS prompt.
+
 ### More details on updating `TE11CylCavity`
 
 Recall that when we added `MKL` to the shared environment named "Cavity", we did not have to specify the full Github URL of
