@@ -49,6 +49,7 @@ println((; dstart, dopt))
 
 case0adj = findfresQ(cwgIadj, cwgDadj, cwgIIadj, fresgoal)
 
+
 println()
 println("With adjusted σ and d, S-parameter model prediction for empty cavity:")
 @show case0adj
@@ -65,6 +66,5 @@ println("Estimated dielectric properties produce these errors:")
 fresgoal = fQ.fres; Qgoal = fQ.Q
 @show (fresgoal, case2a.fres - fresgoal)
 @show (Qgoal, case2a.Q - Qgoal)
-
 
 nothing
