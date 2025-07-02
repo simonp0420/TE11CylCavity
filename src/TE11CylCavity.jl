@@ -458,7 +458,7 @@ end
 
 
 """
-    findet(cwgI, cwgD, cwgII, fresgoal, Qgoal; n1=150) -> (; ϵᵣ, tanδ, info)
+    findet(cwgI, cwgD, cwgII, fresgoal, Qgoal; n1=120) -> (; ϵᵣ, tanδ, info)
 
 Determine sample dielectric constant and loss tangent to yield the desired resonant frequency and Q cavity with sample.
 
@@ -477,7 +477,7 @@ A named tuple with the following fields:
 - `infoϵᵣ`: The `info` struct returned by `PRIMA.bobyqa` when optimizing `cwgD.ϵᵣ`.
 - `infotanδ`: The `info` struct returned by `PRIMA.bobyqa` when optimizing `cwgD.tanδ`.
 """
-function findet(cwgI::CWG, cwgD::CWG, cwgII::CWG, fresgoal, Qgoal; n1=20)
+function findet(cwgI::CWG, cwgD::CWG, cwgII::CWG, fresgoal, Qgoal; n1=120)
 
     n1 = iszero(length(cwgI.modes)) ? n1 : length(cwgI.modes)
     setup_modes!(cwgI, fresgoal, n1)
@@ -509,7 +509,7 @@ function findet(cwgI::CWG, cwgD::CWG, cwgII::CWG, fresgoal, Qgoal; n1=20)
     
     # For loss tangent
     rhobeg = 0.2
-    rhoend = 1e-6
+    rhoend = 1e-8
     x, infotanδ = bobyqa([-log10(tanδ)]; rhobeg, rhoend, xl=[0.5], xu=[5.0]) do x
         tanδ = 10^(-x[1])
         cwgDtest = CWG(; a=cwgD.a, l=cwgD.l, ϵᵣ, tanδ, σ=cwgD.σ, modes=cwgD.modes)
