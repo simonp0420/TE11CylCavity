@@ -1,11 +1,3 @@
-! Touchstone file exported from HFSS 2024.2.0
-!        File:           C:/Users/peter/Documents/Ansoft/Maybell_cavity/CavityFromMaybell.aedt
-!        Generated:      10:42:43 AM Jun 24, 2025
-!        Design:         LossyTransitionC2R
-!        Project:        CavityFromMaybell
-!        Setup:          Setup1
-!        Solution:       Sweep
-!
 ! Variables:
 !        $epsr = 5.5
 !        $tandel = 0.003

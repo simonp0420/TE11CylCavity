@@ -1,11 +1,3 @@
-! Touchstone file exported from HFSS 2024.2.0
-!        File:           CavityFromMaybell.aedt
-!        Generated:      03:55:17 PM May 28, 2025
-!        Design:         LossyEmpty
-!        Project:        CavityFromMaybell
-!        Setup:          Setup1
-!        Solution:       MaybellSweep
-!
 ! Variables:
 !        a = 0.35in
 !        d = 3.5in

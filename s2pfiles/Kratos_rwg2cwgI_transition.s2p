@@ -1,11 +1,3 @@
-! Touchstone file exported from HFSS 2024.2.0
-!        File:           C:/Users/peter/Documents/Ansoft/Maybell_cavity/KatosRWG2CWGTransitions.aedt
-!        Generated:      04:58:22 PM Jun 27, 2025
-!        Design:         RWG_to_CWGI
-!        Project:        KratosRWG2CWGTransitions
-!        Setup:          Setup1
-!        Solution:       Sweep
-!
 ! Variables:
 !        a = 0.276in
 !        d = 2.99in
