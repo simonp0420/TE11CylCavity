@@ -40,47 +40,60 @@ At the Julia prompt, enter the lines shown below:
 
 ```Julia
 using Pkg: Pkg
-Pkg.activate("Cavity", shared=true)
 Pkg.add(url="https://github.com/simonp0420/TE11CylCavity")
 Pkg.add("MKL") # This line only needed if you are running on an Intel CPU
 Pkg.precompile()
 ```
 
-There will be quite a bit of output after the third line.  You can ignore
-any warnings regarding packages that could be updated.  From now on in any Julia script where you want to 
-use the functions in `TE11CylCavity`,  the first lines of the script should be
+These lines install the packages `TE11CylCavity` and `MKL` into the Julia default package environment. There will be
+quite a bit of output after the second line.  You can ignore any warnings regarding packages that could be updated.
+
+## Running Scripts
+Once you create a script named, say "myscript.jl" containing Julia code to execute, you can run it via a 
+function call at the Julia prompt like this:
 
 ```Julia
-using Pkg: Pkg
-Pkg.activate("Cavity", shared=true)
-using MKL # Only if running on an Intel CPU
-using TE11CylCavity
+include("myscript")
 ```
 
-**Note that the first two lines above are not currently present in the scripts located in the `scripts` directory of the 
-repository.  You will have to edit the scripts for your use and add them yourself!**
-Once the scripts are properly edited, you can run them via a command at the Julia prompt like this:
+The `include` function reads the file and executes the lines as if they were typed into the Julia REPL 
+(Read-Evaluate-Print-Loop, i.e. the Julia interactive command line environment, similar to Matlab's or Python's.)
+The above assumes that you started Julia in the same directory as your script, or that you used the Julia `cwd` function
+to move Julia into this directory.  If your script is in a different directory you can use the Julia `joinpath`
+function to specify the full path to the file.  For example, to run a file "myscript.jl" located in
+"C:\home\simonp\julia\scripts" you could use the following:
 
 ```Julia
-include("test_findcase6fresQ.jl")
+include(joinpath("C:\\", "home", "simonp", "julia", "scripts", "myscript.jl"))
 ```
+
+The double backslash above is needed because in strings Julia treats a single backslash character as an escape character.
+
+To run one of the scripts included in the "scripts" directory of your installed `TE11CylCavity` package, use, e.g.
+
+```Julia
+include(pkgdir(TE11CylCavity, "scripts", "test_findcase6fresQ.jl"))
+```
+
+Prior to doing this you must have entered a `using TE11CylCavity` or `using TE11CylCavity: TE11CylCavity` command
+in order for `TE11CylCavity` to be defined. The `pkgdir` function used above locates the file "test_findcase4fresQ.jl"
+in the subdirectory "scripts" of the installation directory of the `TE11CylCavity` package.  
+
 
 When you are ready to exit your Julia session, you can either type Ctrl-D or `exit()` at the Julia prompt, to take you
 back to the OS prompt.
 
 ### More details on updating `TE11CylCavity`
 
-Recall that when we added `MKL` to the shared environment named "Cavity", we did not have to specify the full Github URL of
+Recall that when we added `MKL` to the default package environment, we did not have to specify the full Github URL of
 the MKL (Intel Math Kernel Library) package.  This is because `MKL` is an officially registered Julia package.  Since 
 `TE11CylCavity` is not (yet?) registered, you have to install it via its Github repository URL.  
-This also means that updates to the 
-`TE11CylCavity` package will not be picked up automatically via the convenient `Pkg.update()` function of Julia's package
-manager.  Instead, to pull in changes that were made to the repo, you have to remove the package from the shared 
-environment and then re-add it as follows:
+This also means that updates to the `TE11CylCavity` package will not be picked up automatically via the convenient
+`Pkg.update()` function of Julia's package manager.  Instead, to pull in changes that were made to the repo, you have
+to remove the package from the environment and then re-add it as follows:
 
 ```Julia
 using Pkg: Pkg
-Pkg.activate("Cavity", shared=true)
 Pkg.rm("TE11CylCavity")
 Pkg.add(url="https://github.com/simonp0420/TE11CylCavity")
 ```
