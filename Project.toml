@@ -12,6 +12,7 @@ PRIMA = "0a7d04aa-8ac2-47b3-b7a7-9dbd6ad661ed"
 Roots = "f2b01f46-fcfa-551c-844a-d8ac1e96c665"
 SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+Touchstone = "af4736ee-1570-4274-b14c-898d17d80b75"
 
 [compat]
 Dierckx = "0.5.4"
@@ -20,3 +21,4 @@ LinearAlgebra = "1.11.0"
 MKL = "0.9.0"
 Roots = "2.2.7"
 SpecialFunctions = "2.5.1"
+Touchstone = "0.1.1"
