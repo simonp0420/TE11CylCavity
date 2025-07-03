@@ -12,7 +12,7 @@ lI = 0.2; lD = 0.05; lII = d - (lI + lD) # CWG lengths adding up to d = 3.5 inch
 fQ0 = (; fres = 14.00063, Q = 1338.7645) # Provided values for empty cavity [GHz, unitless]
 fQ = (; fres = 13.291171, Q = 1219.2253) # Provided values for cavity with dielectric sample
 
-using MKL
+using MKL # This only for Intel CPUs
 using TE11CylCavity: TE11CylCavity, CWG, setup_rect2cyl, setup_cyl2rect, setup_modes!, findfresQ, findσd, findet
  
 
