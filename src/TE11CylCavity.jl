@@ -6,6 +6,7 @@ using StaticArrays: @SMatrix
 using PRIMA: newuoa, bobyqa
 using Dierckx: Dierckx # Spline1D and derivative
 using Roots: Roots  # find_zero
+using Touchstone: touchstone_load
 
 include("CWGModeMatching.jl")
 import .CWGModeMatching: cascade  # To be extended
@@ -111,7 +112,6 @@ let s11r, s11i, s12r, s12i, s22r, s22i, flow, fhigh, fname # Establish a new har
 
     """
     function setup_rect2cyl(filename::AbstractString)
-        fname = filename
         (; comments, FGHz, Smat) = read_touchstone(filename)
         flow, fhigh = first(FGHz), last(FGHz)
         s11r = Dierckx.Spline1D(FGHz, real.(@view Smat[1,1,:]), k=3, bc="extrapolate")
