@@ -38,7 +38,7 @@ architecture.
 This only needs to be done once (unless changes are made to the `TE11CylCavity` package, more on that later).
 At the Julia prompt, enter the lines shown below:
 
-```
+```Julia
 using Pkg: Pkg
 Pkg.activate("Cavity", shared=true)
 Pkg.add(url="https://github.com/simonp0420/TE11CylCavity")
